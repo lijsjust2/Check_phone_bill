@@ -1,0 +1,6 @@
+data/
+smoke-data/
+*.exe
+*.md
+.git/
+docker-compose.yml

@@ -1,0 +1,282 @@
+{{template "header" .}}
+<div class="page-head">
+  <div>
+    <h1>费用明细</h1>
+    <p class="muted small">每日查询结果快照：已用话费 = 上一次记录余额 − 当日余额；已用流量为当日增量</p>
+  </div>
+  <div class="page-actions" id="dailyBackBtns" style="display:none">
+    <button class="btn" id="backBtn" onclick="goBack()">返回</button>
+  </div>
+</div>
+
+<div id="pageError" class="alert error" style="display:none"></div>
+
+<!-- 面包屑 -->
+<div class="breadcrumb small muted" id="crumb" style="display:none">
+  <span id="crumb1"></span><span id="crumb2"></span><span id="crumb3"></span>
+</div>
+
+<!-- 视图一：每日汇总 -->
+<div class="card table-card" id="dayListCard">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>日期</th>
+          <th>号码数量</th>
+          <th>已用话费</th>
+          <th>已用流量</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="dayBody"></tbody>
+    </table>
+  </div>
+</div>
+<div id="dayEmpty" class="card" style="display:none;text-align:center">
+  <p class="muted">暂无每日快照</p>
+  <p class="muted small">查询成功后会自动记录当天结果，之后每天可对比出当日话费/流量消耗</p>
+</div>
+
+<!-- 视图二：某日各号码快照 -->
+<div class="card table-card" id="dateListCard" style="display:none">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>备注</th>
+          <th>手机号码</th>
+          <th>余额</th>
+          <th>通用流量</th>
+          <th>语音</th>
+          <th>查询时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="dateBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 视图三：单号码逐日扣费明细 -->
+<div class="card table-card" id="phoneListCard" style="display:none">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>日期</th>
+          <th>当日扣费</th>
+          <th>当日流量</th>
+          <th>余额</th>
+          <th>实时话费</th>
+        </tr>
+      </thead>
+      <tbody id="phoneBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function getCookie(name) {
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return m ? m[2] : '';
+}
+async function api(url, opts = {}) {
+  opts.headers = Object.assign({ 'X-CSRF-Token': getCookie('cm_csrf') }, opts.headers || {});
+  if (opts.body && typeof opts.body === 'object') {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  const r = await fetch(url, opts);
+  const j = await r.json().catch(() => ({ ok: false, error: '响应解析失败' }));
+  return j;
+}
+
+function showError(msg) {
+  const el = document.getElementById('pageError');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+function maskPhone(p) { return p.slice(0, 3) + '****' + p.slice(7); }
+
+// ---------- 视图切换（每日 → 某日号码 → 单号码明细） ----------
+let view = 'days';   // days | date | phone
+let curDate = '';    // 当前查看的日期
+let curPhone = '';   // 当前查看的号码
+
+function switchView(v) {
+  view = v;
+  document.getElementById('dayListCard').style.display = v === 'days' ? 'block' : 'none';
+  document.getElementById('dayEmpty').style.display = 'none';
+  document.getElementById('dateListCard').style.display = v === 'date' ? 'block' : 'none';
+  document.getElementById('phoneListCard').style.display = v === 'phone' ? 'block' : 'none';
+  document.getElementById('dailyBackBtns').style.display = v === 'days' ? 'none' : 'flex';
+  const crumb = document.getElementById('crumb');
+  if (v === 'days') { crumb.style.display = 'none'; return; }
+  crumb.style.display = 'flex';
+  document.getElementById('crumb1').textContent = '每日汇总';
+  document.getElementById('crumb2').textContent = ' / ' + curDate;
+  document.getElementById('crumb3').textContent = v === 'phone' ? ' / ' + maskPhone(curPhone) : '';
+}
+function goBack() {
+  if (view === 'phone') loadDateView(curDate);
+  else if (view === 'date') loadDays();
+}
+
+// ---------- 视图一：每日汇总 ----------
+async function loadDays() {
+  const j = await api('/api/daily');
+  if (!j.ok) {
+    if (j.error === '未登录') { location.href = '/login'; return; }
+    showError(j.error);
+    return;
+  }
+  switchView('days');
+  const tbody = document.getElementById('dayBody');
+  tbody.innerHTML = '';
+  const days = j.days || [];
+  document.getElementById('dayEmpty').style.display = days.length ? 'none' : 'block';
+  document.getElementById('dayListCard').style.display = days.length ? 'block' : 'none';
+  for (const d of days) {
+    const tr = document.createElement('tr');
+    const add = (text, cls) => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (cls) td.className = cls;
+      tr.appendChild(td);
+      return td;
+    };
+    add(d.date);
+    add(String(d.count));
+    const feeTd = add(d.fee, d.fee !== '—' && d.fee.startsWith('-') ? 'ok' : '');
+    if (d.fee !== '—') feeTd.title = '与上一次记录的余额差（负数表示充值或退款）';
+    const flowTd = add(d.flow, d.flow !== '—' && d.flow.startsWith('-') ? 'ok' : '');
+    if (d.flow !== '—') flowTd.title = '当日通用流量增量（负数表示套餐周期重置）';
+    const tdOps = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.className = 'btn sm';
+    btn.textContent = '查看号码';
+    btn.onclick = () => loadDateView(d.date);
+    tdOps.appendChild(btn);
+    tr.appendChild(tdOps);
+    tbody.appendChild(tr);
+  }
+}
+
+// ---------- 视图二：某日各号码快照 ----------
+async function loadDateView(date) {
+  const j = await api('/api/daily/date?date=' + encodeURIComponent(date));
+  if (!j.ok) { showError(j.error); return; }
+  curDate = date;
+  switchView('date');
+  const tbody = document.getElementById('dateBody');
+  tbody.innerHTML = '';
+  const recs = j.records || [];
+  if (!recs.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 7;
+    td.className = 'muted';
+    td.textContent = '当日无查询记录';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  for (const a of recs) {
+    const tr = document.createElement('tr');
+    // 备注
+    const tdRemark = document.createElement('td');
+    if (a.remark) tdRemark.textContent = a.remark;
+    else { tdRemark.textContent = '—'; tdRemark.className = 'muted'; }
+    tr.appendChild(tdRemark);
+    // 手机号码（脱敏）
+    const tdPhone = document.createElement('td');
+    tdPhone.className = 'mono';
+    tdPhone.textContent = maskPhone(a.phone);
+    tdPhone.title = a.phone;
+    tr.appendChild(tdPhone);
+    // 余额
+    const tdBal = document.createElement('td');
+    tdBal.textContent = a.balance || '—';
+    tr.appendChild(tdBal);
+    // 通用流量 / 语音
+    tr.appendChild(usageTd(a.general_flow));
+    tr.appendChild(usageTd(a.voice));
+    // 查询时间
+    const tdTime = document.createElement('td');
+    tdTime.className = 'muted small';
+    tdTime.textContent = a.queried_at || '—';
+    tr.appendChild(tdTime);
+    // 操作
+    const tdOps = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.className = 'btn sm';
+    btn.textContent = '查看明细';
+    btn.onclick = () => loadPhoneView(a.phone);
+    tdOps.appendChild(btn);
+    tr.appendChild(tdOps);
+    tbody.appendChild(tr);
+  }
+}
+
+// ---------- 视图三：单号码逐日扣费明细 ----------
+async function loadPhoneView(phone) {
+  const j = await api('/api/daily/phone?phone=' + encodeURIComponent(phone));
+  if (!j.ok) { showError(j.error); return; }
+  curPhone = phone;
+  switchView('phone');
+  // 面包屑补充备注
+  document.getElementById('crumb3').textContent = ' / ' + maskPhone(phone) + (j.remark ? '（' + j.remark + '）' : '');
+  const tbody = document.getElementById('phoneBody');
+  tbody.innerHTML = '';
+  const rows = j.records || [];
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 5;
+    td.className = 'muted';
+    td.textContent = '该号码暂无每日快照';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    const add = (text, cls, title) => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (cls) td.className = cls;
+      if (title) td.title = title;
+      tr.appendChild(td);
+      return td;
+    };
+    add(r.date);
+    const feeTd = add(r.fee, r.fee !== '—' && r.fee.startsWith('-') ? 'ok' : '');
+    if (r.fee !== '—') feeTd.title = '上一次余额 − 当日余额（负数表示充值或退款）';
+    const flowTd = add(r.flow, r.flow !== '—' && r.flow.startsWith('-') ? 'ok' : '');
+    if (r.flow !== '—') flowTd.title = '当日通用流量增量（负数表示套餐周期重置）';
+    add(r.balance);
+    add(r.realtime_fee || '—', 'muted');
+    tbody.appendChild(tr);
+  }
+}
+
+function usageTd(u) {
+  const td = document.createElement('td');
+  if (!u || (!u.used && !u.total)) { td.textContent = '—'; td.className = 'muted'; return td; }
+  const used = document.createElement('span');
+  used.textContent = u.used || '—';
+  const total = document.createElement('span');
+  total.className = 'muted';
+  total.textContent = ' / ' + (u.total || '—');
+  td.appendChild(used);
+  td.appendChild(total);
+  td.title = '已用 ' + (u.used || '—') + ' / 总量 ' + (u.total || '—');
+  return td;
+}
+
+document.addEventListener('DOMContentLoaded', () => { loadDays(); });
+</script>
+{{template "footer" .}}

@@ -1,0 +1,20 @@
+// 输出/推送字段定义（与 internal/store.Fields 一致）
+const FIELD_LABELS = [
+  { key: 'city',            label: '城市' },
+  { key: 'balance',         label: '话费余额' },
+  { key: 'plan_name',       label: '套餐名称' },
+  { key: 'realtime_fee',   label: '实时话费' },
+  { key: 'bill_total',      label: '本月账单' },
+  { key: 'bill_real',       label: '实际应缴' },
+  { key: 'discount_total',  label: '优惠合计' },
+  { key: 'bill_cycle',      label: '账单周期' },
+  { key: 'general_flow',   label: '通用流量' },
+  { key: 'special_flow',    label: '定向流量' },
+  { key: 'regional_flow',   label: '区域流量' },
+  { key: 'total_flow',      label: '总流量' },
+  { key: 'voice_used',      label: '语音已用' },
+  { key: 'voice_remaining', label: '语音剩余' },
+  { key: 'sms_used',        label: '短信已用' },
+  { key: 'sms_remaining',   label: '短信剩余' },
+  { key: 'query_time',      label: '查询时间' },
+];

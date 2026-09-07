@@ -1,0 +1,2 @@
+# shell 脚本强制 LF，避免 Windows 下 CRLF 导致容器内启动失败
+*.sh text eol=lf

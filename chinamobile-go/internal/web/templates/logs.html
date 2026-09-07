@@ -1,0 +1,111 @@
+{{template "header" .}}
+<div class="page-head">
+  <div>
+    <h1>日志</h1>
+    <p class="muted small">查询历史与系统运行日志（10 秒自动刷新）</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn" onclick="refresh(true)">刷新</button>
+  </div>
+</div>
+
+<div id="pageError" class="alert error" style="display:none"></div>
+
+<div class="card">
+  <h2>查询历史</h2>
+  <p class="muted small">保留最近 200 次查询记录</p>
+  <div class="table-wrap" style="margin-top:12px">
+    <table class="table">
+      <thead>
+        <tr><th>时间</th><th>手机号</th><th>状态</th><th>摘要 / 错误</th></tr>
+      </thead>
+      <tbody id="historyBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>系统日志</h2>
+  <p class="muted small">保留最近 1000 条运行日志（同时写入 data/logs 按天轮转文件，保留 14 天）</p>
+  <div class="log-list" id="logList" style="margin-top:12px"></div>
+</div>
+
+<script>
+function getCookie(name) {
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return m ? m[2] : '';
+}
+async function api(url, opts = {}) {
+  opts.headers = Object.assign({ 'X-CSRF-Token': getCookie('cm_csrf') }, opts.headers || {});
+  const r = await fetch(url, opts);
+  return r.json().catch(() => ({ ok: false, error: '响应解析失败' }));
+}
+
+function showError(msg) {
+  const el = document.getElementById('pageError');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+async function loadHistory() {
+  const j = await api('/api/history');
+  if (!j.ok) { showError(j.error); return; }
+  const body = document.getElementById('historyBody');
+  body.innerHTML = '';
+  for (const h of (j.history || [])) {
+    const tr = document.createElement('tr');
+    const tdT = document.createElement('td');
+    tdT.textContent = h.time;
+    const tdP = document.createElement('td');
+    tdP.className = 'mono';
+    tdP.textContent = h.phone;
+    const tdS = document.createElement('td');
+    if (h.ok) { tdS.innerHTML = '<span class="badge ok">成功</span>'; }
+    else { tdS.innerHTML = '<span class="badge err">失败</span>'; }
+    const tdM = document.createElement('td');
+    tdM.className = 'wrap';
+    tdM.textContent = h.ok ? h.summary : h.error;
+    tdM.title = tdM.textContent;
+    tr.append(tdT, tdP, tdS, tdM);
+    body.appendChild(tr);
+  }
+  if (!(j.history || []).length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.className = 'muted';
+    td.textContent = '暂无查询记录';
+    tr.appendChild(td);
+    body.appendChild(tr);
+  }
+}
+
+async function loadLogs() {
+  const j = await api('/api/logs');
+  if (!j.ok) { showError(j.error); return; }
+  const list = document.getElementById('logList');
+  const autoScroll = list.scrollTop + list.clientHeight >= list.scrollHeight - 30;
+  list.innerHTML = '';
+  for (const e of (j.entries || [])) {
+    const div = document.createElement('div');
+    div.className = 'lv-' + e.level;
+    div.textContent = e.time + ' [' + e.level + '] ' + e.msg;
+    list.appendChild(div);
+  }
+  if (autoScroll) list.scrollTop = list.scrollHeight;
+  if (!(j.entries || []).length) {
+    const div = document.createElement('div');
+    div.className = 'muted';
+    div.textContent = '暂无日志';
+    list.appendChild(div);
+  }
+}
+
+function refresh() { loadHistory(); loadLogs(); }
+document.addEventListener('DOMContentLoaded', () => {
+  refresh();
+  setInterval(refresh, 10000);
+});
+</script>
+{{template "footer" .}}

@@ -1,0 +1,25 @@
+{{template "header" .}}
+<div class="login-card-v2">
+  <div class="login-brand">CHINA&nbsp;MOBILE</div>
+  <h1>移动监控面板</h1>
+  <p class="muted login-subtitle">首次使用，请创建管理员账号</p>
+
+  {{if .Data.Error}}<div class="alert error">{{.Data.Error}}</div>{{end}}
+
+  <form method="post" action="/setup" class="login-form">
+    <div class="field">
+      <label for="username">账号</label>
+      <input id="username" name="username" required placeholder="请输入账号" autocomplete="username" value="{{.Data.FormUsername}}">
+    </div>
+    <div class="field">
+      <label for="password">密码</label>
+      <input id="password" type="password" name="password" required placeholder="请输入密码（至少 6 位）" autocomplete="new-password">
+    </div>
+    <div class="field">
+      <label for="confirm">确认密码</label>
+      <input id="confirm" type="password" name="confirm" required placeholder="请再次输入密码" autocomplete="new-password">
+    </div>
+    <button type="submit" class="btn primary full">创建账号</button>
+  </form>
+</div>
+{{template "footer" .}}
