@@ -1,328 +1,111 @@
-# ChinaMobileMonitor
+# Check10086
 
-中国移动手机话费、流量、语音通话自动查询工具。基于 Playwright 模拟浏览器登录，支持多号码管理 + 多渠道通知推送。
+中国移动套餐用量监控面板（Go 版）。单二进制 + Web 面板，支持多账号管理、定时查询、Bark/PushPlus 推送、2FA 登录保护。
 
-## 功能亮点
+## 功能
 
-- **多号码管理** — 一个配置文件管理多个手机号，每个号码独立登录状态
-- **纯 API 查询** — 登录一次后，后续查询通过 API 拦截获取，无需人工干预
-- **8 种通知推送渠道** — SMTP / PushPlus / Server酱 / Bark / Telegram / 企业微信 / 钉钉 / 飞书 / 自定义 Webhook
-- **灵活输出控制** — 全局默认 + 每号独立覆盖，按需开关任意字段
-- **I/O 密集型并发** — 多账号查询使用 `asyncio.gather` 并发，速度快
-- **登录状态持久化** — Playwright 持久化上下文保存登录状态
-- **全中文配置** — JSON 配置文件全部使用中文键名，直观易读
-- **Docker 部署** — 支持容器化部署，适合服务器定时运行
-- **青龙面板适配** — 可在青龙定时任务中直接运行
+### 账号管理
 
-## 快速开始
+- 短信验证码登录（内置 Chromium 无头浏览器，网页端完成，无需命令行）
+- 账号列表：备注、手机号（脱敏显示，点击查看完整号码）、状态、余额、通用流量、语音、查询时间
+- 单号查询 / 一键查询全部，登录态持久化，一次登录长期使用
 
-### 1. 安装依赖
+### 费用明细
 
-```bash
-pip install -r requirements.txt
-playwright install chromium
-```
+- 三级下钻：每日汇总 → 当日各号码 → 单号码逐日明细
+- 已用话费 = 相邻两次查询余额差值，已用流量同理，自动计算
+- 每日快照保留 400 天
 
-### 2. 登录账号
+### 定时与推送
 
-```bash
-# 登录第一个号码（会打开浏览器，需要手动输入验证码）
-python chinamobile.py --login 18212348674
+- 每日定点自动查询（时间可配置）
+- Bark / PushPlus 推送查询结果
+- 推送字段可勾选（全局默认 + 每账号独立覆盖）
+- 仅告警时推送：余额低于阈值 / 流量用量超百分比
 
-# 登录第二个号码
-python chinamobile.py --login 15712345975
-```
+### 安全
 
-登录成功后，状态会保存到 `chinamobile_data/<手机号>/playwright_user_data/`。
+- 面板登录 2FA：验证码通过 Bark 或 PushPlus 推送（二选一），5 分钟有效
+- 登录失败次数过多自动封禁 IP
+- scrypt 密码哈希 + CSRF 防护
 
-### 3. 配置输出设置
+### 其他
 
-编辑 `chinamobile_config.json`（首次运行会自动创建）：
+- Web 端服务端日志查看
+- 备份导出 / 导入（zip，含账号、设置、登录态，导入后无需重新登录）
+- 数据目录纯文件存储（store.json），易于迁移
 
-```json
-{
-  "输出设置": {
-    "城市": 1,
-    "余额": 1,
-    "套餐名": 1,
-    "通用流量": 1,
-    "定向流量": 1,
-    "区域流量": 1,
-    "总流量": 1,
-    "语音已用": 1,
-    "短信已用": 1,
-    "查询时间": 1
-  },
-  "手机号": [
-    {"号码": "182****8674"},
-    {"号码": "157****5975"}
-  ]
-}
-```
+## 部署
 
-### 4. 运行查询
+### Docker
 
 ```bash
-# 查询配置文件中的所有号码（并发）
-python chinamobile.py --query
-
-# 查询指定号码
-python chinamobile.py --query 182****8674
-
-# 查询并保存原始 API 响应
-python chinamobile.py --query --json
-
-# 用已保存的登录状态打开浏览器
-python chinamobile.py --open 182****8674
-```
-
-### Windows 用户
-
-- 双击 `查询话费.bat` 即可查询配置文件中的所有号码
-- 双击 `登录.bat` 可交互输入手机号并打开浏览器登录
-
-## 输出示例
-
-```
-手机号：182****8674  城市：四川宜宾
-  套餐：动感地带青春卡68套餐
-  余额：229.31元
-  通用流量：已用 6.05GB / 总 80GB
-  定向流量：已用 3.22GB / 总 30GB
-  区域流量：已用 0GB / 总 490GB
-  总流量：已用 9.27GB / 总 600GB
-  语音：已用 120分钟 / 总 500分钟
-  短信：已用 5条 / 总 100条
-  查询时间：2026-05-24 19:36:58
-
-手机号：157****5975  城市：江西南昌
-  套餐：...
-```
-
-> 手机号和城市信息已脱敏处理，实际输出显示完整号码。
-
-## 输出字段配置
-
-`chinamobile_config.json` 中的 `输出设置` 控制每个字段是否显示，**全局默认 + 每号独立覆盖**，灵活度远高于固定输出脚本。
-
-### 字段说明
-
-| 字段 | 默认 | 说明 |
-|------|------|-------|
-| `城市` | 1 | 归属城市（如「四川宜宾」） |
-| `余额` | 1 | 话费余额 |
-| `套餐名` | 1 | 当前套餐名称 |
-| `实时费用` | 0 | 实时消费金额 |
-| `本月账单` | 0 | 本月账单金额（需访问账单页，较慢） |
-| `实际应缴` | 0 | 实际应缴金额 |
-| `优惠合计` | 0 | 优惠总金额 |
-| `账单周期` | 0 | 账单周期起止日期 |
-| `通用流量` | 1 | 通用流量已用/总量 |
-| `定向流量` | 1 | 定向流量已用/总量 |
-| `区域流量` | 1 | 区域流量已用/总量 |
-| `总流量` | 1 | 总流量已用/总量 |
-| `语音已用` | 1 | 语音已用/总量（分钟） |
-| `语音剩余` | 0 | 语音剩余分钟数 |
-| `短信已用` | 1 | 短信已用/总量（条） |
-| `短信剩余` | 0 | 短信剩余条数 |
-| `查询时间` | 1 | 查询时间戳 |
-
-> `1` = 显示，`0` = 隐藏。在号码的 `输出设置` 中覆盖即可独立定制。
-
-### 自定义输出示例
-
-```json
-{
-  "输出设置": {
-    "通用流量": 1,
-    "定向流量": 1,
-    "总流量": 1
-  },
-  "手机号": [
-    {
-      "号码": "182****8674",
-      "输出设置": {
-        "实时费用": 1,
-        "本月账单": 1
-      }
-    }
-  ]
-}
-```
-
-> 该号码会额外显示实时费用和本月账单，其余字段继承全局默认值。
-
-## 通知推送
-
-在配置文件中添加 `通知推送` 段，设置 `"启用": true` 后，脚本会在查询完成后自动推送结果。
-
-### 基础配置
-
-```json
-{
-  "通知推送": {
-    "启用": true
-  }
-}
-```
-
-- `启用`：是否开启通知推送（默认 `false`）
-
-### 支持的推送渠道
-
-填入对应字段即可自动启用，不填则跳过。支持同时启用多个渠道。
-
-| 渠道 | 配置字段 | 说明 |
-|------|---------|------|
-| **SMTP 邮件** | `SMTP服务器` `SMTP端口` `SMTP_SSL` `发件邮箱` `邮箱密码或授权码` `收件邮箱` | 最通用的推送方式 |
-| **PushPlus** | `PushPlus令牌` | 微信推送，填令牌即可 |
-| **Server酱** | `Server酱密钥` | 微信推送，支持 Turbo 版 |
-| **Bark** | `Bark设备码` | iOS 推送 |
-| **Telegram** | `Telegram机器人Token` `Telegram用户ID` | Telegram Bot 推送 |
-| **企业微信** | `企业微信机器人Key` | 机器人 Webhook 推送 |
-| **钉钉** | `钉钉机器人Token` `钉钉机器人密钥` | 支持签名验证 |
-| **飞书** | `飞书机器人Key` | 机器人 Webhook 推送 |
-| **自定义 Webhook** | `自定义Webhook地址` `自定义Webhook方法` `自定义Webhook请求体` | 通用兜底，支持模板变量 `$title` `$content` |
-
-### 推送配置示例
-
-```json
-{
-  "通知推送": {
-    "启用": true,
-    "推送渠道": {
-      "SMTP服务器": "smtp.qq.com",
-      "SMTP端口": 465,
-      "SMTP_SSL": true,
-      "发件邮箱": "your@qq.com",
-      "邮箱密码或授权码": "your_auth_code",
-      "收件邮箱": "receiver@example.com"
-    },
-    "可选渠道": {
-      "PushPlus令牌": "your_pushplus_token",
-      "企业微信机器人Key": "your_wecom_key"
-    }
-  }
-}
-```
-
-## Docker 部署
-
-容器化部署适合服务器定时运行，无需本地环境。
-
-### 快速启动
-
-```bash
-# 构建镜像
-docker build -t chinamobile-monitor .
-
-# 首次登录（需要交互输入验证码，需挂载数据目录）
-docker run -it --rm \
-  -v $(pwd)/chinamobile_config.json:/app/chinamobile_config.json:ro \
-  -v $(pwd)/chinamobile_data:/app/chinamobile_data \
-  chinamobile-monitor \
-  python chinamobile.py --login 138xxxx1234
-
-# 日常查询（非交互，直接输出结果）
-docker run --rm \
-  -v $(pwd)/chinamobile_config.json:/app/chinamobile_config.json:ro \
-  -v $(pwd)/chinamobile_data:/app/chinamobile_data \
+docker run -d \
+  --name chinamobile-monitor \
+  -p 10086:10086 \
+  -v ./data:/app/data \
+  --shm-size 512m \
+  -e TZ=Asia/Shanghai \
+  --restart unless-stopped \
   chinamobile-monitor
 ```
 
-> Windows PowerShell 下把 `$(pwd)` 替换为 `${PWD}`。
-
-### 使用 docker-compose
+或使用 `docker-compose.yml`：
 
 ```bash
-# 编辑 docker-compose.yml，配置好 volumes 路径
-docker-compose up --build
+docker compose up -d
 ```
 
-### 目录说明
-
-| 本地路径 | 容器内路径 | 说明 |
-|-----------|-------------|------|
-| `chinamobile_config.json` | `/app/chinamobile_config.json` | 配置文件（需自行创建） |
-| `chinamobile_data/` | `/app/chinamobile_data/` | 登录状态 + 查询结果 |
-
-### 定时运行（crontab）
+### 从 Releases 下载镜像离线部署
 
 ```bash
-# 每天早上 7:30 执行查询
-30 7 * * * cd /path/to/ChinaMobileMonitor && docker-compose run --rm chinamobile-monitor >> /tmp/mobile_query.log 2>&1
+# 下载对应架构的 tar.gz 后导入
+docker load -i chinamobile-monitor_1.0.0_linux_amd64.tar.gz
+
+# 运行（ARM 设备把 amd64 换成 arm64）
+docker run -d \
+  --name chinamobile-monitor \
+  -p 10086:10086 \
+  -v ./data:/app/data \
+  --shm-size 512m \
+  -e TZ=Asia/Shanghai \
+  --restart unless-stopped \
+  chinamobile-monitor:1.0.0-amd64
 ```
 
-## 青龙面板适配
+### 源码编译
 
-详见 [QINGLONG.md](./QINGLONG.md)
-
-**核心思路：** 在青龙「依赖管理」中安装 `playwright`，然后执行 `playwright install chromium`，即可全自动化运行。
-
-**快速步骤：**
-
-1. 将 `chinamobile.py` 上传到青龙「脚本管理」
-2. 在青龙「依赖管理」中安装 `playwright` 和 `requests`
-3. 执行 `playwright install chromium --with-deps` 安装浏览器
-4. 创建 `chinamobile_config.json` 配置文件
-5. 在青龙「定时任务」中新建任务，命令填 `task chinamobile.py --query`
-
-## 项目结构
-
-```
-ChinaMobileMonitor/
-├── chinamobile.py                 # 主脚本（登录 + 查询 + 通知推送）
-├── chinamobile_config.example.json  # 配置文件模板（脱敏）
-├── chinamobile_config.json         # 实际配置（需自建，含敏感信息）
-├── chinamobile_capture.py         # API 捕获工具，用于调试
-├── chinamobile_data/              # 数据目录（每个号码独立子目录）
-│   ├── 182****8674/
-│   │   ├── playwright_user_data/  # 该号码的登录状态
-│   │   └── query_results/        # 查询结果 JSON（--json 时）
-│   └── 157****5975/
-│       └── ...
-├── Dockerfile                     # Docker 镜像定义
-├── docker-compose.yml            # Docker Compose 编排
-├── requirements.txt               # Python 依赖
-├── 查询话费.bat                 # Windows 快捷查询
-├── 登录.bat                     # Windows 交互登录
-├── .gitignore
-└── README.md
+```bash
+go build -trimpath -ldflags="-s -w" -o chinamobile-monitor .
+./chinamobile-monitor
 ```
 
-## 技术说明
+首次访问 `http://服务器IP:10086` 进入初始化页面创建管理员账号。
 
-### API 拦截原理
+## 环境变量
 
-脚本使用 Playwright 的 `route` 机制拦截中国移动官网的所有 XHR/fetch 请求，自动识别并解析以下 API：
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PORT` | `10086` | Web 面板端口 |
+| `DATA_DIR` | `./data/chinamobile` | 数据目录（账号登录态、设置、日志） |
+| `TZ` | `Asia/Shanghai` | 时区 |
+| `BROWSER_BIN` | 自动探测 | Chromium 路径（本地运行时指定） |
 
-| API | 用途 |
-|-----|------|
-| `getNewMarginInfo` | 流量/语音/短信用量 |
-| `getMainPlan` | 当前套餐名称 |
-| `getMarginQueryInfo` | 客户归属地信息 |
-| `getCustBaseInfo` | 客户基本信息（城市） |
-| `fareBalance` | 话费余额 |
-| `accountFeeBalanceQuery` | 实时费用 |
-| `getBillSum` | 本月账单 |
+## 数据与备份
 
-### AES 解密
+所有数据存储在 `DATA_DIR` 下：
 
-中国移动的部分 API 响应使用 AES-128-CBC 加密：
-- Key: `1234123412ABCDEF`
-- IV: `ABCDEF1234123412`
+- `store.json` — 账号、设置、每日快照
+- `<手机号>/` — 各账号浏览器登录态
+- 日志文件
 
-脚本自动检测并解密响应体，无需手动处理。
+`data/` 目录包含登录态等敏感信息，请妥善备份，切勿泄露。面板内置「设置 → 备份与恢复」可一键导出导入。
 
-## 注意事项
+## 说明
 
-1. **验证码** — 登录时需要手动输入短信验证码（脚本会等待用户输入，也可直接在浏览器中输入）
-2. **账单查询较慢** — `本月账单`/`实际应缴`/`优惠合计` 需要访问账单页面，默认关闭，需要时再在配置文件中开启
-3. **登录状态设备绑定** — 登录状态与设备绑定，不能跨设备复制使用，需在本机完成登录
-
-## 免责声明
-
-本项目仅供个人学习和研究使用。请勿用于任何商业或非法用途。使用本工具所产生的任何后果由使用者自行承担。请合理使用，避免频繁调用对移动服务器造成压力。
+- 数据接口来自中国移动官网网页端（wx.10086.cn），仅供个人学习使用
+- 登录态与设备绑定，跨设备迁移请使用面板内置备份导出 / 导入
+- 避免频繁查询对移动服务器造成压力
 
 ## License
 

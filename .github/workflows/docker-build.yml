@@ -1,4 +1,4 @@
-name: Docker Build and Release
+﻿name: Docker Build and Release
 
 on:
   push:
@@ -48,7 +48,7 @@ jobs:
       - name: Build AMD64 image
         uses: docker/build-push-action@v5
         with:
-          context: chinamobile-go
+          context: .
           platforms: linux/amd64
           load: true
           tags: chinamobile-monitor:${{ steps.rel.outputs.version }}-amd64
@@ -64,7 +64,7 @@ jobs:
       - name: Build ARM64 image
         uses: docker/build-push-action@v5
         with:
-          context: chinamobile-go
+          context: .
           platforms: linux/arm64
           load: true
           tags: chinamobile-monitor:${{ steps.rel.outputs.version }}-arm64
@@ -102,7 +102,7 @@ jobs:
         if: steps.dh.outputs.push == 'true'
         uses: docker/build-push-action@v5
         with:
-          context: chinamobile-go
+          context: .
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

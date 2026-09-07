@@ -1,16 +1,7 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python/
-chinamobile_config.json
-chinamobile_data/
-telecom_config.json
-telecom_tokens/
 .env
 
 # Go 版
-chinamobile-go/chinamobile-go
-chinamobile-go/chinamobile-go.exe
-chinamobile-go/data/
-chinamobile-go/smoke-data/
+chinamobile-go
+chinamobile-go.exe
+data/
+smoke-data/
