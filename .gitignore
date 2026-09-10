@@ -3,5 +3,8 @@
 # Go 版
 chinamobile-go
 chinamobile-go.exe
+chinamobile-monitor
+chinamobile-monitor.exe
 data/
 smoke-data/
+.trae/

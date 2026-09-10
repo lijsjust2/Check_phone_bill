@@ -16,8 +16,8 @@ import (
 
 	"golang.org/x/crypto/scrypt"
 
+	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/loggerx"
-	"chinamobile-monitor/internal/mobile"
 	"chinamobile-monitor/internal/runner"
 	"chinamobile-monitor/internal/store"
 )
@@ -61,20 +61,12 @@ type Server struct {
 	limitMu   sync.Mutex
 	failures  map[string]*failRecord // ip → 登录失败计数
 
-	flowMu *flowManager
-}
-
-type flowManager struct {
-	mu             sync.Mutex
-	flow           *mobile.LoginFlow
-	lastStage      string // 最近一次会话的结束阶段（会话结束后供前端展示原因）
-	lastMsg        string
-	lastSubmitted  bool // 结束前是否已提交过验证码（前端据此给出「查询验证」入口）
+	flows *carrier.SessionManager
 }
 
 // New 创建 Web 服务
 func New(st *store.Store, log *loggerx.Logger, r *runner.Runner, port int, dataDir string) *Server {
-	return &Server{
+	s := &Server{
 		st:       st,
 		log:      log,
 		runner:   r,
@@ -83,8 +75,21 @@ func New(st *store.Store, log *loggerx.Logger, r *runner.Runner, port int, dataD
 		sessions: map[string]*session{},
 		pending:  map[string]*pendingCode{},
 		failures: map[string]*failRecord{},
-		flowMu:   &flowManager{},
 	}
+	// 登录会话结束回调：成功时保存登录态（浏览器型置 HasLoginState；密码型由 LoginStateSaver 写回 token）
+	s.flows = carrier.NewSessionManager(func(m carrier.SessionMeta, sess carrier.LoginSession) {
+		if m.Stage != carrier.StageSuccess {
+			return
+		}
+		st.UpdateAccount(m.Phone, func(a *store.Account) {
+			a.HasLoginState = true
+			if saver, ok := sess.(carrier.LoginStateSaver); ok {
+				saver.SaveLogin(a)
+			}
+		})
+		log.Info("[%s] 登录态已保存", m.Phone)
+	})
+	return s
 }
 
 // HashPassword scrypt 派生（N=32768, r=8, p=1）
@@ -121,6 +126,7 @@ func (s *Server) Start() error {
 
 	// API
 	mux.HandleFunc("/api/login/send-code", s.apiSendCode)
+	mux.HandleFunc("/api/carriers", s.apiCarriers)
 	mux.HandleFunc("/api/accounts", s.apiAccounts)
 	mux.HandleFunc("/api/accounts/delete", s.apiAccountDelete)
 	mux.HandleFunc("/api/accounts/edit", s.apiAccountEdit)
@@ -130,6 +136,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/login-flow/start", s.apiLoginFlowStart)
 	mux.HandleFunc("/api/login-flow/status", s.apiLoginFlowStatus)
 	mux.HandleFunc("/api/login-flow/code", s.apiLoginFlowCode)
+	mux.HandleFunc("/api/login-flow/captcha", s.apiLoginFlowCaptcha)
+	mux.HandleFunc("/api/login-flow/image-captcha", s.apiLoginFlowImageCaptcha)
 	mux.HandleFunc("/api/login-flow/cancel", s.apiLoginFlowCancel)
 	mux.HandleFunc("/api/settings", s.apiSettings)
 	mux.HandleFunc("/api/settings/push-test", s.apiPushTest)
@@ -158,7 +166,13 @@ func secureHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "same-origin")
-		h.Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
+		// 放行腾讯验证码（联通登录滑块）：脚本、弹窗 iframe 与图片均来自 captcha.qcloud.com
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; style-src 'self' 'unsafe-inline'; "+
+				"script-src 'self' 'unsafe-inline' https://turing.captcha.qcloud.com; "+
+				"img-src 'self' data: https://*.captcha.qcloud.com https://*.qq.com; "+
+				"frame-src 'self' https://*.captcha.qcloud.com https://ssl.captcha.qq.com; "+
+				"connect-src 'self'")
 		next.ServeHTTP(w, r)
 	})
 }

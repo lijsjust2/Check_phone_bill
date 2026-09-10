@@ -2,7 +2,7 @@
 <div class="page-head">
   <div>
     <h1>费用明细</h1>
-    <p class="muted small">每日查询结果快照：已用话费 = 上一次记录余额 − 当日余额；已用流量为当日增量</p>
+    <p class="muted small">每日查询结果快照（每天保留每个号码最后一次成功查询）：昨日扣款 = 今日余额 − 昨日余额（负数=扣费，正数=充值/退款）；昨日流量/语音 = 今日已用 − 昨日已用</p>
   </div>
   <div class="page-actions" id="dailyBackBtns" style="display:none">
     <button class="btn" id="backBtn" onclick="goBack()">返回</button>
@@ -24,8 +24,8 @@
         <tr>
           <th>日期</th>
           <th>号码数量</th>
-          <th>已用话费</th>
-          <th>已用流量</th>
+          <th>昨日扣款</th>
+          <th>昨日流量</th>
           <th>操作</th>
         </tr>
       </thead>
@@ -47,8 +47,9 @@
           <th>备注</th>
           <th>手机号码</th>
           <th>余额</th>
-          <th>通用流量</th>
-          <th>语音</th>
+          <th>昨日扣款</th>
+          <th>昨日流量</th>
+          <th>昨日语音</th>
           <th>查询时间</th>
           <th>操作</th>
         </tr>
@@ -58,17 +59,23 @@
   </div>
 </div>
 
-<!-- 视图三：单号码逐日扣费明细 -->
+<!-- 视图三：单号码逐日完整明细 -->
 <div class="card table-card" id="phoneListCard" style="display:none">
   <div class="table-wrap">
     <table class="table">
       <thead>
         <tr>
           <th>日期</th>
-          <th>当日扣费</th>
-          <th>当日流量</th>
+          <th>昨日扣款</th>
+          <th>昨日流量</th>
+          <th>昨日语音</th>
           <th>余额</th>
           <th>实时话费</th>
+          <th>通用流量</th>
+          <th>定向流量</th>
+          <th>区域流量</th>
+          <th>语音</th>
+          <th>短信</th>
         </tr>
       </thead>
       <tbody id="phoneBody"></tbody>
@@ -150,10 +157,8 @@ async function loadDays() {
     };
     add(d.date);
     add(String(d.count));
-    const feeTd = add(d.fee, d.fee !== '—' && d.fee.startsWith('-') ? 'ok' : '');
-    if (d.fee !== '—') feeTd.title = '与上一次记录的余额差（负数表示充值或退款）';
-    const flowTd = add(d.flow, d.flow !== '—' && d.flow.startsWith('-') ? 'ok' : '');
-    if (d.flow !== '—') flowTd.title = '当日通用流量增量（负数表示套餐周期重置）';
+    tr.appendChild(diffTd(d.fee, '各号码（今日余额 − 昨日余额）之和（负数=扣费，正数=充值/退款）', 'fee'));
+    tr.appendChild(diffTd(d.flow, '各号码（今日已用 − 昨日已用）之和（负数表示套餐周期重置）', 'usage'));
     const tdOps = document.createElement('td');
     const btn = document.createElement('button');
     btn.className = 'btn sm';
@@ -177,7 +182,7 @@ async function loadDateView(date) {
   if (!recs.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 7;
+    td.colSpan = 8;
     td.className = 'muted';
     td.textContent = '当日无查询记录';
     tr.appendChild(td);
@@ -201,9 +206,10 @@ async function loadDateView(date) {
     const tdBal = document.createElement('td');
     tdBal.textContent = a.balance || '—';
     tr.appendChild(tdBal);
-    // 通用流量 / 语音
-    tr.appendChild(usageTd(a.general_flow));
-    tr.appendChild(usageTd(a.voice));
+    // 昨日扣款 / 昨日流量 / 昨日语音（与上一次记录的差值）
+    tr.appendChild(diffTd(a.fee, '今日余额 − 昨日余额（负数=扣费，正数=充值/退款）', 'fee'));
+    tr.appendChild(diffTd(a.flow, '今日已用 − 昨日已用（负数表示套餐周期重置）', 'usage'));
+    tr.appendChild(diffTd(a.voice, '今日已用 − 昨日已用（负数表示套餐周期重置）', 'usage'));
     // 查询时间
     const tdTime = document.createElement('td');
     tdTime.className = 'muted small';
@@ -235,7 +241,7 @@ async function loadPhoneView(phone) {
   if (!rows.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 5;
+    td.colSpan = 11;
     td.className = 'muted';
     td.textContent = '该号码暂无每日快照';
     tr.appendChild(td);
@@ -253,14 +259,42 @@ async function loadPhoneView(phone) {
       return td;
     };
     add(r.date);
-    const feeTd = add(r.fee, r.fee !== '—' && r.fee.startsWith('-') ? 'ok' : '');
-    if (r.fee !== '—') feeTd.title = '上一次余额 − 当日余额（负数表示充值或退款）';
-    const flowTd = add(r.flow, r.flow !== '—' && r.flow.startsWith('-') ? 'ok' : '');
-    if (r.flow !== '—') flowTd.title = '当日通用流量增量（负数表示套餐周期重置）';
+    tr.appendChild(diffTd(r.fee, '今日余额 − 昨日余额（负数=扣费，正数=充值/退款）', 'fee'));
+    tr.appendChild(diffTd(r.flow, '今日已用 − 昨日已用（负数表示套餐周期重置）', 'usage'));
+    tr.appendChild(diffTd(r.voice_diff, '今日已用 − 昨日已用（负数表示套餐周期重置）', 'usage'));
     add(r.balance);
     add(r.realtime_fee || '—', 'muted');
+    // 各项快照（当日查询值：已用 / 总量）
+    tr.appendChild(usageTd(r.general_flow));
+    tr.appendChild(usageTd(r.special_flow));
+    tr.appendChild(usageTd(r.regional_flow));
+    tr.appendChild(usageTd(r.voice));
+    tr.appendChild(usageTd(r.sms));
     tbody.appendChild(tr);
   }
+}
+
+// diffTd 差值单元格：空显示"—"；正数补 "+"，负数自带 "−"，0 不带符号
+// kind='fee' 扣款列：负数（扣费）红色，正数（充值/退款）绿色
+// kind='usage' 流量/语音列：负数（套餐周期重置）绿色，正数（正常使用）不高亮
+function diffTd(v, title, kind) {
+  const td = document.createElement('td');
+  if (v === undefined || v === null || v === '' || v === '—') {
+    td.textContent = '—';
+    td.className = 'muted';
+    return td;
+  }
+  const neg = String(v).startsWith('-');
+  const pos = !neg && /[1-9]/.test(v); // 排除 0.00
+  td.textContent = pos ? '+' + v : v;
+  if (kind === 'fee') {
+    if (neg) td.className = 'err';
+    else if (pos) td.className = 'ok';
+  } else if (kind === 'usage' && neg) {
+    td.className = 'ok';
+  }
+  td.title = title;
+  return td;
 }
 
 function usageTd(u) {

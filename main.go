@@ -10,12 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/loggerx"
 	"chinamobile-monitor/internal/mobile"
 	"chinamobile-monitor/internal/push"
 	"chinamobile-monitor/internal/runner"
 	"chinamobile-monitor/internal/scheduler"
 	"chinamobile-monitor/internal/store"
+	_ "chinamobile-monitor/internal/telecom" // 注册中国电信 Provider
+	_ "chinamobile-monitor/internal/unicom"  // 注册中国联通 Provider
 	"chinamobile-monitor/internal/web"
 )
 
@@ -61,14 +64,19 @@ func main() {
 }
 
 func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *runner.Runner) {
-	fmt.Printf("中国移动套餐用量监控 v%s\n", version)
+	fmt.Printf("三网话费监控 v%s\n", version)
 	if abs, err := filepath.Abs(dataDir); err == nil {
 		fmt.Printf("数据目录: %s\n", abs)
 	}
 
-	// 首次启动时把已有账号的登录态标志同步一次
+	// 首次启动时把已有账号的登录态标志同步一次（浏览器型看目录；电信看 token；联通看 Cookie）
 	for _, a := range st.ListAccounts() {
-		if _, err := os.Stat(store.UserDataDir(dataDir, a.Phone)); err == nil {
+		_, dirErr := os.Stat(store.UserDataDir(dataDir, a.Phone))
+		if dirErr == nil && a.CarrierCode() == carrier.Mobile {
+			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
+		} else if a.CarrierCode() == carrier.Telecom && a.Token != "" {
+			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
+		} else if a.CarrierCode() == carrier.Unicom && a.Cookie != "" {
 			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
 		}
 	}
@@ -149,7 +157,7 @@ func cliQuery(dataDir, target string, saveJSON bool, log *loggerx.Logger, st *st
 	fmt.Printf("开始查询 %d 个号码...\n", len(phones))
 	settings := st.GetSettings()
 
-	var results []*mobile.PhoneResult
+	var results []*carrier.Result
 	for _, phone := range phones {
 		phone = strings.TrimSpace(phone)
 		if phone == "" {
@@ -165,14 +173,14 @@ func cliQuery(dataDir, target string, saveJSON bool, log *loggerx.Logger, st *st
 			if a := st.GetAccount(phone); a != nil {
 				fields = a.EffectiveFields(settings.Push.Fields)
 			}
-			for _, line := range mobile.FormatResultLines(phone, pr.Result, fields) {
+			for _, line := range carrier.FormatResultLines(phone, pr.Result, fields) {
 				fmt.Println(line)
 			}
 		}
 	}
 
 	fmt.Println("\n" + strings.Repeat("-", 50))
-	output := mobile.FormatOutput(results, func(phone string) store.Fields {
+	output := carrier.FormatOutput(results, func(phone string) store.Fields {
 		if a := st.GetAccount(phone); a != nil {
 			return a.EffectiveFields(settings.Push.Fields)
 		}
@@ -184,27 +192,31 @@ func cliQuery(dataDir, target string, saveJSON bool, log *loggerx.Logger, st *st
 	if push.HasChannel(settings.Push) {
 		cfg := settings.Push
 		if cfg.AlertOnly {
-			alerts := []*mobile.PhoneResult{}
+			alerts := []*carrier.Result{}
 			for _, pr := range results {
-				if pr.Err == "" && mobile.IsAlert(pr.Result, cfg.AlertBalanceBelow, cfg.AlertFlowPercent) {
+				if pr.Err == "" && carrier.IsAlert(pr.Result, cfg.AlertBalanceBelow, cfg.AlertFlowPercent) {
 					alerts = append(alerts, pr)
 				}
 			}
 			if len(alerts) == 0 {
 				log.Info("仅告警推送：本次无告警，跳过")
 			} else {
-				n := push.SendAll(cfg, "【移动监控·告警】", mobile.FormatOutput(alerts, func(string) store.Fields { return cfg.Fields }))
+				n := push.SendAll(cfg, "【套餐监控·告警】", carrier.FormatOutput(alerts, func(string) store.Fields { return cfg.Fields }))
 				log.Info("告警推送完成（发送渠道数 %d）", n)
 			}
 		} else {
-			n := push.SendAll(cfg, "【移动套餐用量监控】", output)
+			n := push.SendAll(cfg, "【三网套餐用量监控】", output)
 			log.Info("查询结果推送完成（发送渠道数 %d）", n)
 		}
 	}
 }
 
-func queryOne(dataDir, phone string, saveJSON bool, log *loggerx.Logger, st *store.Store) *mobile.PhoneResult {
-	pr := mobile.QueryPhone(phone, dataDir, log)
+func queryOne(dataDir, phone string, saveJSON bool, log *loggerx.Logger, st *store.Store) *carrier.Result {
+	acc := st.GetAccount(phone)
+	if acc == nil {
+		return &carrier.Result{Phone: phone, Err: "账号不存在"}
+	}
+	pr := carrier.Get(acc.CarrierCode()).Query(acc, dataDir, log)
 	now := time.Now()
 	if pr.Err != "" {
 		st.UpdateAccount(phone, func(a *store.Account) {

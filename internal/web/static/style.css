@@ -161,6 +161,46 @@ body {
 .badge.off { background: #f3f4f6; color: var(--muted); }
 .badge.run { background: #eff6ff; color: var(--primary); }
 
+/* 运营商徽标（移动绿 / 联通蓝 / 电信橙） */
+.badge.carrier-mobile { background: #f0fdf4; color: #16a34a; }
+.badge.carrier-unicom { background: #eff6ff; color: #0052cc; }
+.badge.carrier-telecom { background: #fff7ed; color: #ea580c; }
+
+/* 添加账号：运营商选择卡片 */
+.carrier-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0 4px; }
+.carrier-card {
+  display: flex; flex-direction: column; align-items: flex-start;
+  padding: 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); cursor: pointer; text-align: left;
+  font-family: inherit; font-size: 14px; color: var(--text);
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.carrier-card::before {
+  content: ''; display: block; width: 22px; height: 3px;
+  border-radius: 2px; margin-bottom: 8px;
+}
+.carrier-card[data-carrier="mobile"]::before { background: #16a34a; }
+.carrier-card[data-carrier="unicom"]::before { background: #0066DD; }
+.carrier-card[data-carrier="telecom"]::before { background: #ea580c; }
+.carrier-card .carrier-name { font-weight: 600; }
+.carrier-card:hover:not(:disabled):not(.selected) { border-color: #c7cdd6; background: #fafafa; }
+.carrier-card.selected {
+  border-color: var(--primary); background: #f5f7ff;
+  box-shadow: 0 0 0 1px var(--primary);
+}
+.carrier-card.selected .carrier-name { color: var(--primary); }
+.carrier-card:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 添加账号：表单内运营商标签（点击返回选择） */
+.carrier-chip {
+  display: inline-block; margin-top: 0; padding: 7px 14px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: #fafafa; font-size: 13px; font-family: inherit;
+  color: var(--text); cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.carrier-chip:hover { border-color: var(--primary); color: var(--primary); }
+
 /* 表格 */
 .table-wrap { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; }
@@ -173,6 +213,7 @@ body {
 .table tr:last-child td { border-bottom: none; }
 .table td.wrap { white-space: normal; min-width: 120px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
 .table td.ok { color: #16a34a; }
+.table td.err { color: var(--danger); }
 
 /* 面包屑（费用明细页） */
 .breadcrumb { display: flex; align-items: center; gap: 4px; margin-bottom: 12px; }
@@ -274,4 +315,7 @@ label.check-line input[type="checkbox"] { margin: 0; }
   }
   .field-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
   .login-card-v2 { max-width: none; width: calc(100vw - 32px); margin: 6vh auto 0; padding: 26px 20px; }
+  .carrier-cards { gap: 8px; }
+  .carrier-card { padding: 10px 8px; font-size: 13px; }
+  .carrier-card .small { font-size: 11px; }
 }

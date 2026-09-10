@@ -10,41 +10,27 @@ import (
 
 	"github.com/go-rod/rod"
 
+	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/loggerx"
 	"chinamobile-monitor/internal/store"
 )
 
-// 登录流程阶段（Web 端点轮询展示，CLI 端打印）
+// 登录流程阶段（三网统一的 carrier 常量别名，保持包内既有引用兼容）
 const (
-	StageStarting    = "starting"     // 启动浏览器
-	StagePageLoading = "page_loading" // 打开登录页
-	StageCodeSending = "code_sending" // 勾选协议 / 填手机号 / 发送验证码
-	StageWaitingCode = "waiting_code" // 等待用户输入短信验证码
-	StageSendFailed  = "send_failed"  // 验证码发送失败（仍可手动输入）
-	StageSubmitting  = "submitting"   // 已填入验证码，等待登录完成
-	StageSuccess     = "success"
-	StageError       = "error"
-	StageClosed      = "closed" // 浏览器被关闭 / 用户取消
+	StageStarting    = carrier.StageStarting    // 启动浏览器
+	StagePageLoading = carrier.StagePageLoading // 打开登录页
+	StageCodeSending = carrier.StageCodeSending // 勾选协议 / 填手机号 / 发送验证码
+	StageWaitingCode = carrier.StageWaitingCode // 等待用户输入短信验证码
+	StageSendFailed  = carrier.StageSendFailed  // 验证码发送失败（仍可手动输入）
+	StageSubmitting  = carrier.StageSubmitting  // 已填入验证码，等待登录完成
+	StageSuccess     = carrier.StageSuccess
+	StageError       = carrier.StageError
+	StageClosed      = carrier.StageClosed // 浏览器被关闭 / 用户取消
 )
 
-var stageText = map[string]string{
-	StageStarting:    "正在启动浏览器...",
-	StagePageLoading: "正在打开登录页...",
-	StageCodeSending: "正在填写手机号并发送验证码...",
-	StageWaitingCode: "验证码已发送，请输入收到的短信验证码",
-	StageSendFailed:  "验证码发送失败",
-	StageSubmitting:  "验证码已提交，等待登录完成...",
-	StageSuccess:     "登录成功",
-	StageError:       "发生错误",
-	StageClosed:      "浏览器已关闭",
-}
-
-// StageText 阶段中文说明
+// StageText 阶段中文说明（委托 carrier 统一实现）
 func StageText(stage string) string {
-	if t, ok := stageText[stage]; ok {
-		return t
-	}
-	return stage
+	return carrier.StageText(stage)
 }
 
 // LoginFlow 一次登录会话（CLI 有头 / Web 无头共用），
@@ -81,6 +67,7 @@ func StartLogin(phone, dataDir string, headless bool, log *loggerx.Logger) (*Log
 	f := &LoginFlow{
 		Phone:  phone,
 		Stage:  StageStarting,
+		Msg:    "正在启动浏览器窗口...",
 		ctx:    ctx,
 		cancel: cancel,
 		codeCh: make(chan string, 4),

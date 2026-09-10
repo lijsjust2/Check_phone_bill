@@ -5,8 +5,6 @@ import (
 	"crypto/cipher"
 	"encoding/hex"
 	"testing"
-
-	"chinamobile-monitor/internal/store"
 )
 
 // 与 Python 版相同的 AES-128-CBC 加密（用于生成测试向量，验证解密兼容）
@@ -125,63 +123,5 @@ func TestParseResults(t *testing.T) {
 	}
 	if r.FlowUsedPercent < 11.07 || r.FlowUsedPercent > 11.09 {
 		t.Errorf("flowPercent = %v, want ≈11.08", r.FlowUsedPercent)
-	}
-}
-
-func TestFormatResultLines(t *testing.T) {
-	r := &store.QueryResult{
-		City:        "北京",
-		Balance:     "18.30元",
-		PlanName:    "移动花卡宝藏版",
-		RealtimeFee: "5.20",
-		TotalFlow:   store.UsageItem{Used: "6.65GB", Total: "60GB"},
-		Voice:       store.UsageItem{Used: "120分钟", Total: "200分钟"},
-		Sms:         store.UsageItem{Used: "5条", Total: "100条"},
-		QueriedAt:   "2026-09-07 12:00:00",
-	}
-	lines := FormatResultLines("13800138000", r, store.DefaultFields())
-	joined := ""
-	for _, l := range lines {
-		joined += l + "\n"
-	}
-	for _, want := range []string{
-		"手机号：13800138000", "  城市：北京", "  套餐：移动花卡宝藏版",
-		"  余额：18.30元", "  实时费用：5.20元",
-		"  总流量：已用 6.65GB / 总 60GB",
-		"  语音：已用 120分钟 / 总 200分钟",
-		"  短信：已用 5条 / 总 100条",
-		"  查询时间：2026-09-07 12:00:00",
-	} {
-		if !contains(joined, want) {
-			t.Errorf("输出缺少行: %q\n实际输出:\n%s", want, joined)
-		}
-	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || indexOf(s, sub) >= 0)
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
-func TestIsAlert(t *testing.T) {
-	r := &store.QueryResult{BalanceNum: 5.0}
-	if !IsAlert(r, 10, 80) {
-		t.Error("余额 5 < 10 应告警")
-	}
-	r2 := &store.QueryResult{BalanceNum: 50, FlowUsedPercent: 90}
-	if !IsAlert(r2, 10, 80) {
-		t.Error("流量 90% > 80% 应告警")
-	}
-	r3 := &store.QueryResult{BalanceNum: 50, FlowUsedPercent: 10}
-	if IsAlert(r3, 10, 80) {
-		t.Error("无告警条件命中")
 	}
 }

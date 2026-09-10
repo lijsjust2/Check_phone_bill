@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
-	"chinamobile-monitor/internal/mobile"
+	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/push"
 	"chinamobile-monitor/internal/store"
 )
@@ -259,6 +260,7 @@ func (s *Server) apiSendCode(w http.ResponseWriter, r *http.Request) {
 
 type accountJSON struct {
 	Phone         string             `json:"phone"`
+	Carrier       string             `json:"carrier"`
 	Remark        string             `json:"remark"`
 	HasLoginState bool               `json:"has_login_state"`
 	LastQuery     string             `json:"last_query"`
@@ -275,7 +277,7 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
 		for _, a := range s.st.ListAccounts() {
 			lines := []string{}
 			if a.LastResult != nil {
-				lines = mobile.FormatResultLines(a.Phone, a.LastResult, a.EffectiveFields(settings.Push.Fields))
+				lines = carrier.FormatResultLines(a.Phone, a.LastResult, a.EffectiveFields(settings.Push.Fields))
 			}
 			lastQuery := ""
 			if !a.LastQuery.IsZero() {
@@ -283,6 +285,7 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 			out = append(out, &accountJSON{
 				Phone:         a.Phone,
+				Carrier:       a.CarrierCode(),
 				Remark:        a.Remark,
 				HasLoginState: a.HasLoginState,
 				LastQuery:     lastQuery,
@@ -304,8 +307,9 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Phone  string `json:"phone"`
-		Remark string `json:"remark"`
+		Phone   string `json:"phone"`
+		Carrier string `json:"carrier"`
+		Remark  string `json:"remark"`
 	}
 	if err := s.decodeBody(r, &req); err != nil {
 		s.apiFail(w, "参数错误")
@@ -315,7 +319,7 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
 		s.apiFail(w, "手机号格式不正确")
 		return
 	}
-	if _, err := s.st.UpsertAccount(req.Phone, req.Remark); err != nil {
+	if _, err := s.st.UpsertAccount(req.Phone, req.Carrier, req.Remark); err != nil {
 		s.apiFail(w, err.Error())
 		return
 	}
@@ -367,13 +371,36 @@ func (s *Server) apiQueryStatus(w http.ResponseWriter, r *http.Request) {
 
 // ---------- 登录会话（添加账号）----------
 
+// apiCarriers 已注册运营商列表（前端添加账号弹窗数据源）
+func (s *Server) apiCarriers(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAPI(w, r) {
+		return
+	}
+	type carrierInfo struct {
+		Code          string `json:"code"`
+		Name          string `json:"name"`
+		NeedsPassword bool   `json:"needs_password"`
+		NeedsSMSCode  bool   `json:"needs_sms_code"`
+	}
+	out := []carrierInfo{}
+	for _, p := range carrier.All() {
+		out = append(out, carrierInfo{
+			Code: p.Code(), Name: p.Name(),
+			NeedsPassword: p.NeedsPassword(), NeedsSMSCode: p.NeedsSMSCode(),
+		})
+	}
+	writeJSON(w, map[string]interface{}{"ok": true, "carriers": out})
+}
+
 func (s *Server) apiLoginFlowStart(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAPI(w, r) {
 		return
 	}
 	var req struct {
-		Phone  string `json:"phone"`
-		Remark string `json:"remark"`
+		Phone    string `json:"phone"`
+		Carrier  string `json:"carrier"`
+		Remark   string `json:"remark"`
+		Password string `json:"password"` // 电信服务密码
 	}
 	if err := s.decodeBody(r, &req); err != nil {
 		s.apiFail(w, "参数错误")
@@ -383,55 +410,38 @@ func (s *Server) apiLoginFlowStart(w http.ResponseWriter, r *http.Request) {
 		s.apiFail(w, "手机号格式不正确")
 		return
 	}
-	if _, err := s.st.UpsertAccount(req.Phone, req.Remark); err != nil {
+	p := carrier.Get(req.Carrier)
+	if p.Code() != req.Carrier {
+		s.apiFail(w, "不支持的运营商")
+		return
+	}
+	if p.NeedsPassword() && strings.TrimSpace(req.Password) == "" {
+		s.apiFail(w, "请填写服务密码")
+		return
+	}
+	if _, err := s.st.UpsertAccount(req.Phone, req.Carrier, req.Remark); err != nil {
 		s.apiFail(w, err.Error())
 		return
 	}
 
-	// 同一时间只允许一个登录会话
-	s.flowMu.mu.Lock()
-	if s.flowMu.flow != nil {
-		old := s.flowMu.flow
-		old.Cancel()
-		s.flowMu.mu.Unlock()
-		// 等旧会话浏览器关闭（释放 profile 锁）
-		select {
-		case <-old.Done():
-		case <-time.After(15 * time.Second):
-		}
-		s.flowMu.mu.Lock()
+	// 电信重新登录：复用已绑定设备 androidId，避免重复短信验证
+	androidID := ""
+	if acc := s.st.GetAccount(req.Phone); acc != nil {
+		androidID = acc.AndroidID
 	}
-	s.flowMu.mu.Unlock()
 
-	flow, err := mobile.StartLogin(req.Phone, s.dataDir(), false, s.log)
-	if err != nil {
+	if err := s.flows.Start(p, carrier.LoginParams{
+		Phone:     req.Phone,
+		Password:  strings.TrimSpace(req.Password),
+		AndroidID: androidID,
+		DataDir:   s.dataDir(),
+		Headless:  false,
+		Log:       s.log,
+	}); err != nil {
 		s.apiFail(w, err.Error())
 		return
 	}
-	s.flowMu.mu.Lock()
-	s.flowMu.flow = flow
-	s.flowMu.lastStage = ""
-	s.flowMu.lastMsg = ""
-	s.flowMu.lastSubmitted = false
-	s.flowMu.mu.Unlock()
-
-	phone := req.Phone
-	go func() {
-		<-flow.Done()
-		stage, msg := flow.Status()
-		if stage == mobile.StageSuccess {
-			s.st.UpdateAccount(phone, func(a *store.Account) { a.HasLoginState = true })
-			s.log.Info("[%s] 登录态已保存", phone)
-		}
-		s.flowMu.mu.Lock()
-		if s.flowMu.flow == flow {
-			s.flowMu.flow = nil
-		}
-		s.flowMu.lastStage = stage
-		s.flowMu.lastMsg = msg
-		s.flowMu.lastSubmitted = flow.CodeSubmitted()
-		s.flowMu.mu.Unlock()
-	}()
+	s.log.Info("[%s] 启动 %s 登录流程", req.Phone, p.Name())
 	s.apiOK(w, nil)
 }
 
@@ -439,29 +449,34 @@ func (s *Server) apiLoginFlowStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAPI(w, r) {
 		return
 	}
-	s.flowMu.mu.Lock()
-	flow := s.flowMu.flow
-	lastStage, lastMsg, lastSubmitted := s.flowMu.lastStage, s.flowMu.lastMsg, s.flowMu.lastSubmitted
-	s.flowMu.mu.Unlock()
-	if flow == nil {
+	active, meta, sess := s.flows.StatusDetail()
+	if !active {
 		out := map[string]interface{}{"ok": true, "active": false}
 		// 附带最近一次会话的结束阶段，前端据此提示结束原因
-		if lastStage != "" {
-			out["stage"] = lastStage
-			out["stage_text"] = mobile.StageText(lastStage)
-			if lastMsg != "" {
-				out["msg"] = lastMsg
+		if meta.Stage != "" {
+			out["stage"] = meta.Stage
+			out["stage_text"] = carrier.StageText(meta.Stage)
+			if meta.Msg != "" {
+				out["msg"] = meta.Msg
 			}
-			out["submitted"] = lastSubmitted
+			out["submitted"] = meta.Submitted
 		}
 		writeJSON(w, out)
 		return
 	}
-	stage, msg := flow.Status()
-	writeJSON(w, map[string]interface{}{
-		"ok": true, "active": true, "phone": flow.Phone,
-		"stage": stage, "stage_text": mobile.StageText(stage), "msg": msg,
-	})
+	out := map[string]interface{}{
+		"ok": true, "active": true, "phone": meta.Phone, "carrier": meta.Carrier,
+		"stage": meta.Stage, "stage_text": carrier.StageText(meta.Stage), "msg": meta.Msg,
+	}
+	// 电信设备注册：need_image_captcha 阶段附带图片验证码（data URI）
+	if meta.Stage == carrier.StageNeedImageCaptcha {
+		if ics, ok := sess.(carrier.ImageCaptchaSession); ok {
+			if img := ics.CaptchaImage(); img != "" {
+				out["captcha_image"] = img
+			}
+		}
+	}
+	writeJSON(w, out)
 }
 
 func (s *Server) apiLoginFlowCode(w http.ResponseWriter, r *http.Request) {
@@ -473,14 +488,46 @@ func (s *Server) apiLoginFlowCode(w http.ResponseWriter, r *http.Request) {
 		s.apiFail(w, "参数错误")
 		return
 	}
-	s.flowMu.mu.Lock()
-	flow := s.flowMu.flow
-	s.flowMu.mu.Unlock()
-	if flow == nil {
-		s.apiFail(w, "当前没有进行中的登录会话")
+	if err := s.flows.SubmitCode(req.Code); err != nil {
+		s.apiFail(w, err.Error())
 		return
 	}
-	if err := flow.SubmitCode(req.Code); err != nil {
+	s.apiOK(w, nil)
+}
+
+// apiLoginFlowCaptcha 联通滑块票据提交（前端 TencentCaptcha 回调后调用）
+func (s *Server) apiLoginFlowCaptcha(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAPI(w, r) {
+		return
+	}
+	var req struct {
+		Ticket  string `json:"ticket"`
+		Randstr string `json:"randstr"`
+	}
+	if err := s.decodeBody(r, &req); err != nil {
+		s.apiFail(w, "参数错误")
+		return
+	}
+	if err := s.flows.SubmitCaptcha(req.Ticket, req.Randstr); err != nil {
+		s.apiFail(w, err.Error())
+		return
+	}
+	s.apiOK(w, nil)
+}
+
+// apiLoginFlowImageCaptcha 电信图片验证码提交（设备注册流程）
+func (s *Server) apiLoginFlowImageCaptcha(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAPI(w, r) {
+		return
+	}
+	var req struct {
+		Captcha string `json:"captcha"`
+	}
+	if err := s.decodeBody(r, &req); err != nil {
+		s.apiFail(w, "参数错误")
+		return
+	}
+	if err := s.flows.SubmitImageCaptcha(strings.TrimSpace(req.Captcha)); err != nil {
 		s.apiFail(w, err.Error())
 		return
 	}
@@ -491,12 +538,7 @@ func (s *Server) apiLoginFlowCancel(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAPI(w, r) {
 		return
 	}
-	s.flowMu.mu.Lock()
-	flow := s.flowMu.flow
-	s.flowMu.mu.Unlock()
-	if flow != nil {
-		flow.Cancel()
-	}
+	s.flows.Cancel()
 	s.apiOK(w, nil)
 }
 
@@ -691,22 +733,23 @@ func flowUsedGB(u store.UsageItem) float64 {
 	return u.UsedNum
 }
 
-// dailyDiff 单条快照与上一次记录的差值（话费=上一次余额-当日余额；流量=当日已用-上一次已用）
+// dailyDiff 今日查询与昨日查询的差值（今日 − 昨日）
+// 扣款 = 今日余额 − 昨日余额（负数=扣费/支出，正数=充值/退款）；流量/语音 = 今日已用 − 昨日已用
 type dailyDiff struct {
-	fee, flow float64
-	hasPrev   bool // 是否存在上一次记录
-	feeOK     bool // 两次余额均可解析
+	fee, flow, voice float64
+	hasPrev          bool // 是否存在上一次记录
+	feeOK            bool // 两次余额均可解析
 }
 
-// buildDiffs 号码 → 日期 → 与上一次记录的差值
+// buildDiffs 号码 → 日期 → 差值（今日查询 − 昨日查询，银行账单口径：支出为负、收入为正）
 func buildDiffs(all []store.DailyRecord) map[string]map[string]dailyDiff {
-	asc := map[string][]store.DailyRecord{}
-	for i := len(all) - 1; i >= 0; i-- { // all 为日期倒序，反转为升序
-		d := all[i]
-		asc[d.Phone] = append(asc[d.Phone], d)
+	byPhone := map[string][]store.DailyRecord{}
+	for _, d := range all {
+		byPhone[d.Phone] = append(byPhone[d.Phone], d)
 	}
 	diffs := map[string]map[string]dailyDiff{}
-	for phone, recs := range asc {
+	for phone, recs := range byPhone {
+		sort.Slice(recs, func(i, j int) bool { return recs[i].Date < recs[j].Date }) // 按日期升序，确保 cur 为新记录
 		m := map[string]dailyDiff{}
 		for i := 0; i < len(recs); i++ {
 			var dd dailyDiff
@@ -714,10 +757,11 @@ func buildDiffs(all []store.DailyRecord) map[string]map[string]dailyDiff {
 				cur, prev := recs[i].Result, recs[i-1].Result
 				dd.hasPrev = true
 				if validBalance(cur.Balance) && validBalance(prev.Balance) {
-					dd.fee = prev.BalanceNum - cur.BalanceNum
+					dd.fee = cur.BalanceNum - prev.BalanceNum
 					dd.feeOK = true
 				}
 				dd.flow = flowUsedGB(cur.GeneralFlow) - flowUsedGB(prev.GeneralFlow)
+				dd.voice = cur.Voice.UsedNum - prev.Voice.UsedNum
 			}
 			m[recs[i].Date] = dd
 		}
@@ -726,7 +770,7 @@ func buildDiffs(all []store.DailyRecord) map[string]map[string]dailyDiff {
 	return diffs
 }
 
-// apiDailyList 每日汇总列表：日期、号码数量、已用话费、已用流量
+// apiDailyList 每日汇总列表：日期、号码数量、昨日扣款、昨日流量（各号码差值之和）
 func (s *Server) apiDailyList(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAPI(w, r) {
 		return
@@ -792,29 +836,38 @@ func (s *Server) apiDailyByDate(w http.ResponseWriter, r *http.Request) {
 	for _, a := range s.st.ListAccounts() {
 		remarks[a.Phone] = a.Remark
 	}
+	all := s.st.ListDaily()
+	diffs := buildDiffs(all)
 	type rec struct {
-		Phone       string           `json:"phone"`
-		Remark      string           `json:"remark"`
-		Balance     string           `json:"balance"`
-		GeneralFlow *store.UsageItem `json:"general_flow,omitempty"`
-		Voice       *store.UsageItem `json:"voice,omitempty"`
-		QueriedAt   string           `json:"queried_at"`
+		Phone     string `json:"phone"`
+		Remark    string `json:"remark"`
+		Balance   string `json:"balance"`
+		Fee       string `json:"fee"`   // 昨日扣款（元）：今日余额 − 昨日余额（负数=扣费，正数=充值/退款）
+		Flow      string `json:"flow"`  // 昨日流量增量（GB）：今日已用 − 昨日已用
+		Voice     string `json:"voice"` // 昨日语音增量（分钟）：今日已用 − 昨日已用
+		QueriedAt string `json:"queried_at"`
 	}
 	var recs []*rec
-	for _, d := range s.st.ListDaily() {
+	for _, d := range all {
 		if d.Date != date || d.Result == nil {
 			continue
 		}
-		gf, vf := d.Result.GeneralFlow, d.Result.Voice
-		recs = append(recs, &rec{
-			Phone: d.Phone, Remark: remarks[d.Phone], Balance: d.Result.Balance,
-			GeneralFlow: &gf, Voice: &vf, QueriedAt: d.Result.QueriedAt,
-		})
+		rw := &rec{
+			Phone: d.Phone, Remark: remarks[d.Phone], Balance: d.Result.Balance, QueriedAt: d.Result.QueriedAt,
+		}
+		if dd := diffs[d.Phone][d.Date]; dd.hasPrev {
+			if dd.feeOK {
+				rw.Fee = fmt.Sprintf("%.2f", dd.fee)
+			}
+			rw.Flow = fmt.Sprintf("%.2fGB", dd.flow)
+			rw.Voice = fmt.Sprintf("%.0f分钟", dd.voice)
+		}
+		recs = append(recs, rw)
 	}
 	writeJSON(w, map[string]interface{}{"ok": true, "date": date, "records": recs})
 }
 
-// apiDailyByPhone 单号码逐日扣费明细
+// apiDailyByPhone 单号码逐日完整明细：每日快照全量字段 + 与前一日差值
 func (s *Server) apiDailyByPhone(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAPI(w, r) {
 		return
@@ -838,23 +891,34 @@ func (s *Server) apiDailyByPhone(w http.ResponseWriter, r *http.Request) {
 	diffs := buildDiffs(all)[phone]
 
 	type row struct {
-		Date        string `json:"date"`
-		Balance     string `json:"balance"`
-		Fee         string `json:"fee"`
-		Flow        string `json:"flow"`
-		RealtimeFee string `json:"realtime_fee"`
+		Date         string           `json:"date"`
+		Fee          string           `json:"fee"`       // 昨日扣款（元）：今日余额 − 昨日余额
+		Flow         string           `json:"flow"`      // 昨日流量增量（GB）：今日已用 − 昨日已用
+		VoiceDiff    string           `json:"voice_diff"` // 昨日语音增量（分钟）
+		Balance      string           `json:"balance"`
+		RealtimeFee  string           `json:"realtime_fee"`
+		GeneralFlow  *store.UsageItem `json:"general_flow,omitempty"`
+		SpecialFlow  *store.UsageItem `json:"special_flow,omitempty"`
+		RegionalFlow *store.UsageItem `json:"regional_flow,omitempty"`
+		Voice        *store.UsageItem `json:"voice,omitempty"`
+		Sms          *store.UsageItem `json:"sms,omitempty"`
 	}
 	var rows []*row
 	for _, d := range mine {
-		rw := &row{Date: d.Date, Balance: "—", Fee: "—", Flow: "—"}
+		rw := &row{Date: d.Date, Balance: "—", Fee: "—", Flow: "—", VoiceDiff: "—"}
 		if d.Result != nil {
 			rw.Balance = d.Result.Balance
 			rw.RealtimeFee = d.Result.RealtimeFee
+			gf, sf, rf := d.Result.GeneralFlow, d.Result.SpecialFlow, d.Result.RegionalFlow
+			vv, sv := d.Result.Voice, d.Result.Sms
+			rw.GeneralFlow, rw.SpecialFlow, rw.RegionalFlow = &gf, &sf, &rf
+			rw.Voice, rw.Sms = &vv, &sv
 			if dd := diffs[d.Date]; dd.hasPrev {
 				if dd.feeOK {
 					rw.Fee = fmt.Sprintf("%.2f", dd.fee)
 				}
 				rw.Flow = fmt.Sprintf("%.2fGB", dd.flow)
+				rw.VoiceDiff = fmt.Sprintf("%.0f分钟", dd.voice)
 			}
 		}
 		rows = append(rows, rw)

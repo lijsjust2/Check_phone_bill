@@ -15,16 +15,18 @@ import (
 
 // UsageItem 单项用量（已格式化，便于展示/推送）
 type UsageItem struct {
-	Used     string  `json:"used"`
-	Total    string  `json:"total"`
-	UsedNum  float64 `json:"used_num"`
-	TotalNum float64 `json:"total_num"`
-	Unit     string  `json:"unit"`
+	Used      string  `json:"used"`
+	Total     string  `json:"total"`
+	UsedNum   float64 `json:"used_num"`
+	TotalNum  float64 `json:"total_num"`
+	Unit      string  `json:"unit"`
+	Unlimited bool    `json:"unlimited,omitempty"` // 不限量套餐（联通 limited=1）：Total 显示"不限量"，TotalNum=0
 }
 
 // QueryResult 一次查询的完整结果
 type QueryResult struct {
 	QueriedAt       string    `json:"queried_at"`
+	Carrier         string    `json:"carrier,omitempty"` // 运营商代码（查询时由 Provider 填写；移动历史结果缺省）
 	City            string    `json:"city"`
 	Balance         string    `json:"balance"`
 	BalanceNum      float64   `json:"balance_num"`
@@ -142,16 +144,36 @@ type User struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-// Account 移动账号
+// Account 运营商账号
 type Account struct {
-	Phone           string       `json:"phone"`
-	Remark          string       `json:"remark"`
-	FieldsOverride  *Fields      `json:"fields_override,omitempty"` // 每号独立输出设置（nil=跟随全局）
-	HasLoginState   bool          `json:"has_login_state"`          // user-data 目录是否存在
-	LastQuery       time.Time    `json:"last_query"`
-	LastOK          bool         `json:"last_ok"`
-	LastError       string       `json:"last_error"`
-	LastResult      *QueryResult `json:"last_result,omitempty"`
+	Phone          string       `json:"phone"`
+	Carrier        string       `json:"carrier,omitempty"` // "mobile" | "unicom" | "telecom"；空串视为 mobile（旧数据兼容）
+	Remark         string       `json:"remark"`
+	FieldsOverride *Fields      `json:"fields_override,omitempty"` // 每号独立输出设置（nil=跟随全局）
+	HasLoginState  bool         `json:"has_login_state"`          // 浏览器型：user-data 目录存在；HTTP 型：Token 非空
+	LastQuery      time.Time    `json:"last_query"`
+	LastOK         bool         `json:"last_ok"`
+	LastError      string       `json:"last_error"`
+	LastResult     *QueryResult `json:"last_result,omitempty"`
+
+	// 电信专用（服务密码登录，token 长期有效；移动登录态在 data/accounts/<phone>/user-data）
+	Password     string `json:"password,omitempty"`
+	Token        string `json:"token,omitempty"`
+	ProvinceCode string `json:"province_code,omitempty"`
+	CityCode     string `json:"city_code,omitempty"`
+	AndroidID    string `json:"android_id,omitempty"` // 短信授权绑定的设备 id（3006 设备信任用）
+
+	// 联通专用（短信验证码 HTTP 登录：Token 存 token_online）
+	Cookie string `json:"cookie,omitempty"`
+	AppID  string `json:"app_id,omitempty"`
+}
+
+// CarrierCode 规范化运营商代码（"" → "mobile"）
+func (a *Account) CarrierCode() string {
+	if a.Carrier == "" {
+		return "mobile"
+	}
+	return a.Carrier
 }
 
 // EffectiveFields 账号生效字段：覆盖 > 全局
@@ -392,17 +414,27 @@ func (s *Store) getAccountLocked(phone string) *Account {
 	return nil
 }
 
-// UpsertAccount 新增/更新账号基本信息
-func (s *Store) UpsertAccount(phone, remark string) (*Account, error) {
+// UpsertAccount 新增/更新账号基本信息（carrier 仅在新建时写入，防误改已有账号的运营商）
+func (s *Store) UpsertAccount(phone, carrier, remark string) (*Account, error) {
 	if !ValidPhone(phone) {
 		return nil, errors.New("手机号格式不正确")
+	}
+	if carrier == "" {
+		carrier = "mobile"
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a := s.getAccountLocked(phone)
 	if a == nil {
-		a = &Account{Phone: phone}
+		a = &Account{Phone: phone, Carrier: carrier}
 		s.Accounts = append(s.Accounts, a)
+	} else if a.CarrierCode() != carrier {
+		// 运营商变更（换网重登）：更新归属并清掉旧运营商登录态
+		a.Carrier = carrier
+		a.HasLoginState = false
+		a.Password, a.Token, a.ProvinceCode, a.CityCode = "", "", "", ""
+		a.Cookie, a.AppID = "", ""
+		a.LastResult = nil
 	}
 	if remark != "" {
 		a.Remark = remark

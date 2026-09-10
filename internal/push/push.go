@@ -89,8 +89,8 @@ func HasChannel(cfg store.PushSettings) bool {
 
 // Send2FACode 通过指定渠道推送面板登录验证码（channel: "bark" | "pushplus"）
 func Send2FACode(cfg store.PushSettings, channel, code string) error {
-	title := "移动监控验证码 " + code
-	body := fmt.Sprintf("中国移动监控面板提醒你：\n正在执行登录操作\n验证码为：%s\n验证码有效期 5 分钟，请尽快认证", code)
+	title := "话费监控验证码 " + code
+	body := fmt.Sprintf("话费监控面板提醒你：\n正在执行登录操作\n验证码为：%s\n验证码有效期 5 分钟，请尽快认证", code)
 	var err error
 	switch channel {
 	case "bark":
@@ -111,7 +111,7 @@ func Send2FACode(cfg store.PushSettings, channel, code string) error {
 
 // SendTest 测试推送
 func SendTest(cfg store.PushSettings) error {
-	title := "【移动套餐用量监控】"
+	title := "【话费监控】"
 	body := "如果你收到这条消息，说明推送配置成功。"
 	if SendAll(cfg, title, body) == 0 {
 		return fmt.Errorf("推送失败，请检查配置")

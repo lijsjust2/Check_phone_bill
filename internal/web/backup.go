@@ -258,18 +258,7 @@ func (s *Server) apiBackupImport(w http.ResponseWriter, r *http.Request) {
 
 // cancelActiveFlow 取消进行中的登录流程并等待浏览器退出（释放 profile 文件锁）
 func (s *Server) cancelActiveFlow() {
-	s.flowMu.mu.Lock()
-	flow := s.flowMu.flow
-	s.flowMu.flow = nil
-	s.flowMu.mu.Unlock()
-	if flow == nil {
-		return
-	}
-	flow.Cancel()
-	select {
-	case <-flow.Done():
-	case <-time.After(15 * time.Second):
-	}
+	s.flows.CancelAndWait()
 }
 
 // safeZipName 防 zip slip：返回归一化相对路径，非法路径返回 false

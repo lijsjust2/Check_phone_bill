@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{.Title}} - 移动监控</title>
+  <title>{{.Title}} - 话费监控</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 {{if .Username}}
 <div class="layout">
   <aside class="sidebar">
-    <div class="sidebar-brand">移动监控</div>
+    <div class="sidebar-brand">话费监控</div>
     <nav class="sidebar-nav">
       <a href="/accounts" class="{{if eq .Active "accounts"}}active{{end}}">账号管理</a>
       <a href="/daily" class="{{if eq .Active "daily"}}active{{end}}">费用明细</a>

@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/loggerx"
-	"chinamobile-monitor/internal/mobile"
 	"chinamobile-monitor/internal/push"
 	"chinamobile-monitor/internal/store"
 )
@@ -51,9 +51,9 @@ func (r *Runner) QueryAll(doPush bool) error {
 			r.mu.Unlock()
 		}()
 		accounts := r.st.ListAccounts()
-		results := make([]*mobile.PhoneResult, 0, len(accounts))
+		results := make([]*carrier.Result, 0, len(accounts))
 		for _, a := range accounts {
-			pr := r.queryOneUpdate(a.Phone)
+			pr := r.queryOneUpdate(a)
 			results = append(results, pr)
 		}
 		if doPush {
@@ -64,7 +64,7 @@ func (r *Runner) QueryAll(doPush bool) error {
 }
 
 // QueryOne 立即查询单个账号并更新状态
-func (r *Runner) QueryOne(phone string) (*mobile.PhoneResult, error) {
+func (r *Runner) QueryOne(phone string) (*carrier.Result, error) {
 	r.mu.Lock()
 	if r.running {
 		r.mu.Unlock()
@@ -79,33 +79,39 @@ func (r *Runner) QueryOne(phone string) (*mobile.PhoneResult, error) {
 		r.mu.Unlock()
 	}()
 
-	if r.st.GetAccount(phone) == nil {
+	acc := r.st.GetAccount(phone)
+	if acc == nil {
 		return nil, fmt.Errorf("账号不存在")
 	}
-	return r.queryOneUpdate(phone), nil
+	return r.queryOneUpdate(acc), nil
 }
 
 // queryOneUpdate 查询单号并落库（不加锁，由调用方保证串行）
-func (r *Runner) queryOneUpdate(phone string) *mobile.PhoneResult {
-	pr := mobile.QueryPhone(phone, r.dataDir, r.log)
+func (r *Runner) queryOneUpdate(a *store.Account) *carrier.Result {
+	phone := a.Phone
+	pr := carrier.Get(a.CarrierCode()).Query(a, r.dataDir, r.log)
 	now := time.Now()
 	if pr.Err != "" {
-		r.st.UpdateAccount(phone, func(a *store.Account) {
-			a.LastQuery = now
-			a.LastOK = false
-			a.LastError = pr.Err
+		r.st.UpdateAccount(phone, func(x *store.Account) {
+			x.LastQuery = now
+			x.LastOK = false
+			x.LastError = pr.Err
 		})
 		r.st.AddHistory(store.HistoryEntry{
 			Time: now.Format("2006-01-02 15:04:05"), Phone: phone, OK: false, Error: pr.Err,
 		})
 		r.log.Error("[%s] 查询失败: %s", phone, pr.Err)
 	} else {
-		r.st.UpdateAccount(phone, func(a *store.Account) {
-			a.LastQuery = now
-			a.LastOK = true
-			a.LastError = ""
-			a.LastResult = pr.Result
-			a.HasLoginState = true
+		r.st.UpdateAccount(phone, func(x *store.Account) {
+			x.LastQuery = now
+			x.LastOK = true
+			x.LastError = ""
+			x.LastResult = pr.Result
+			x.HasLoginState = true
+			// 查询过程中自愈了登录态（电信 token 续期）时回写
+			if pr.UpdateAccount != nil {
+				pr.UpdateAccount(x)
+			}
 		})
 		r.st.AddHistory(store.HistoryEntry{
 			Time: now.Format("2006-01-02 15:04:05"), Phone: phone, OK: true,
@@ -119,7 +125,7 @@ func (r *Runner) queryOneUpdate(phone string) *mobile.PhoneResult {
 }
 
 // pushResults 按推送设置推送查询结果
-func (r *Runner) pushResults(results []*mobile.PhoneResult) {
+func (r *Runner) pushResults(results []*carrier.Result) {
 	settings := r.st.GetSettings()
 	cfg := settings.Push
 	if !push.HasChannel(cfg) {
@@ -136,12 +142,12 @@ func (r *Runner) pushResults(results []*mobile.PhoneResult) {
 
 	if cfg.AlertOnly {
 		// 仅告警时推送：余额低于阈值 / 流量已用超阈值
-		alerts := []*mobile.PhoneResult{}
+		alerts := []*carrier.Result{}
 		for _, pr := range results {
 			if pr.Err != "" {
 				continue
 			}
-			if mobile.IsAlert(pr.Result, cfg.AlertBalanceBelow, cfg.AlertFlowPercent) {
+			if carrier.IsAlert(pr.Result, cfg.AlertBalanceBelow, cfg.AlertFlowPercent) {
 				alerts = append(alerts, pr)
 			}
 		}
@@ -149,13 +155,13 @@ func (r *Runner) pushResults(results []*mobile.PhoneResult) {
 			r.log.Info("仅告警推送：本次无告警，跳过")
 			return
 		}
-		text := mobile.FormatOutput(alerts, fieldsOf)
-		n := push.SendAll(cfg, "【移动监控·告警】", text)
+		text := carrier.FormatOutput(alerts, fieldsOf)
+		n := push.SendAll(cfg, "【话费监控·告警】", text)
 		r.log.Info("告警推送完成（发送渠道数 %d）", n)
 		return
 	}
 
-	text := mobile.FormatOutput(results, fieldsOf)
-	n := push.SendAll(cfg, "【移动套餐用量监控】", text)
+	text := carrier.FormatOutput(results, fieldsOf)
+	n := push.SendAll(cfg, "【三网话费监控】", text)
 	r.log.Info("查询结果推送完成（发送渠道数 %d）", n)
 }
