@@ -1,7 +1,9 @@
 package unicom
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/tidwall/gjson"
 
@@ -119,6 +121,39 @@ func ParseFlowLeft(data gjson.Result) *store.QueryResult {
 		r.FlowUsedPercent = r.TotalFlow.UsedNum / r.TotalFlow.TotalNum * 100
 	}
 	return r
+}
+
+// ParseBalance accountBalancenew 响应 → 余额/实时话费（尽力读取，字段参考 ha_unicom_bill）：
+//
+//	curntbalancecust 当前余额（元）
+//	totalrealfee / realfeecustnew 本月实时话费（元）
+func ParseBalance(r *store.QueryResult, data gjson.Result) {
+	d := data.Get("data")
+	if !d.Exists() {
+		d = data
+	}
+	if v, ok := parseFee(d.Get("curntbalancecust")); ok {
+		r.Balance = fmt.Sprintf("%.2f元", v)
+		r.BalanceNum = v
+	}
+	if v, ok := parseFee(d.Get("totalrealfee")); ok {
+		r.RealtimeFee = fmt.Sprintf("%.2f", v)
+	} else if v, ok := parseFee(d.Get("realfeecustnew")); ok {
+		r.RealtimeFee = fmt.Sprintf("%.2f", v)
+	}
+}
+
+// parseFee 接口余额字段 → 浮点（支持 "23.45"、"-1.20"、"0" 等，无效返回 false）
+func parseFee(v gjson.Result) (float64, bool) {
+	s := strings.TrimSpace(v.Str)
+	if s == "" {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return f, true
 }
 
 // accUsage 明细聚合器（use/total 原始值，主副卡取当前卡已用）

@@ -59,6 +59,10 @@
           <span class="carrier-name">中国电信</span>
           <span class="muted small">服务密码登录</span>
         </button>
+        <button type="button" class="carrier-card" data-carrier="cbn" onclick="selectCarrier('cbn')">
+          <span class="carrier-name">中国广电</span>
+          <span class="muted small">图片+短信验证码登录</span>
+        </button>
       </div>
       <div class="modal-btns">
         <button class="btn" onclick="closeAddModal()">取消</button>
@@ -84,6 +88,13 @@
           <label>备注（可选）</label>
           <input id="addRemark" maxlength="30" placeholder="如：主号">
         </div>
+        <!-- 联通：微信小程序通道（ha_unicom_bill 协议，openid 长期有效） -->
+        <div class="field" id="unicomOpenIDField" style="display:none">
+          <label>微信 OpenID 登录（小程序抓包获取，长期有效）</label>
+          <input id="unicomOpenID" maxlength="64" autocomplete="off" autocapitalize="none" placeholder="粘贴抓包获取的 openid（o 开头 28 位）">
+          <button type="button" class="btn" style="width:100%;margin-top:8px" id="unicomOpenIDBtn" onclick="submitUnicomOpenID()">使用该 OpenID 登录</button>
+          <p class="muted small" style="margin-top:6px">获取步骤：① 电脑安装 Reqable（reqable.com，免费）并开始抓包；② 电脑微信打开「中国联通」小程序并登录一次；③ 在 Reqable 中筛选 mina.10010.com，任选一个请求，从请求体 JSON 中复制 openid 粘贴到此处。全程仅与联通官方服务器通信</p>
+        </div>
         <p class="muted small" id="step1Hint">点击「发送验证码」后，系统将打开登录页并自动填写手机号</p>
       </div>
       <div class="modal-btns">
@@ -97,12 +108,12 @@
       <div style="margin-top:10px" id="captchaRetryWrap" hidden>
         <button type="button" class="btn" style="width:100%" id="captchaRetryBtn" onclick="showUnicomCaptcha()">点击完成滑块验证</button>
       </div>
-      <!-- 电信设备注册：图片验证码（首次登录需短信验证绑定设备） -->
+      <!-- 图片验证码（电信设备注册 / 广电登录第一步） -->
       <div style="margin-top:12px" id="telecomCaptchaWrap" hidden>
         <div class="field">
           <label>图片验证码</label>
           <div style="display:flex;gap:8px;align-items:stretch">
-            <input id="telecomCaptcha" maxlength="4" autocomplete="off" autocapitalize="none" placeholder="4 位图片字符" style="flex:1">
+            <input id="telecomCaptcha" maxlength="6" autocomplete="off" autocapitalize="none" placeholder="输入图片中的字符" style="flex:1">
             <img id="telecomCaptchaImg" alt="图片验证码" style="height:46px;border-radius:10px;border:1px solid var(--line,rgba(16,35,29,.16));background:#fff">
           </div>
         </div>
@@ -357,6 +368,7 @@ const CARRIER_FALLBACK = {
   mobile: { name: '中国移动', needs_password: false, needs_sms_code: true },
   unicom: { name: '中国联通', needs_password: false, needs_sms_code: true },
   telecom: { name: '中国电信', needs_password: true, needs_sms_code: false },
+  cbn: { name: '中国广电', needs_password: false, needs_sms_code: true },
 };
 
 function carrierName(code) {
@@ -388,17 +400,54 @@ function updateStep1Form() {
   const info = carrierInfo(flowCarrier);
   document.getElementById('carrierChip').textContent = info.name + '（点击更换）';
   document.getElementById('passwordField').style.display = info.needs_password ? 'block' : 'none';
+  document.getElementById('unicomOpenIDField').style.display = flowCarrier === 'unicom' ? 'block' : 'none';
   const btn = document.getElementById('sendBtn');
+  if (flowCarrier === 'unicom') {
+    // 联通走微信小程序 OpenID 通道，不走网关滑块/短信
+    btn.style.display = 'none';
+    document.getElementById('step1Hint').textContent = '联通账号请通过上方「微信 OpenID 登录」添加（参考提示里的抓包步骤）';
+    return;
+  }
+  btn.style.display = '';
   if (info.needs_password) {
     btn.textContent = '立即登录';
     document.getElementById('step1Hint').textContent = '点击「立即登录」后，系统将使用服务密码登录中国电信；首次登录需短信验证绑定设备';
+  } else if (flowCarrier === 'cbn') {
+    btn.textContent = '发送验证码';
+    document.getElementById('step1Hint').textContent = '点击「发送验证码」后，将连接广电网上营业厅并显示图片验证码，输入图片字符后发送短信验证码';
   } else {
     btn.textContent = '发送验证码';
-    document.getElementById('step1Hint').textContent = flowCarrier === 'unicom'
-      ? '点击「发送验证码」后，如需安全验证会在本页面弹出滑块，完成后短信验证码将自动发送'
-      : '点击「发送验证码」后，系统将打开登录页并自动填写手机号';
+    document.getElementById('step1Hint').textContent = '点击「发送验证码」后，系统将打开登录页并自动填写手机号';
   }
 }
+
+// 联通微信小程序通道直接登录（推荐，自托管）
+async function submitUnicomOpenID() {
+  const phone = document.getElementById('addPhone').value.trim();
+  const openid = document.getElementById('unicomOpenID').value.trim();
+  if (!/^1\d{10}$/.test(phone)) { alert('请输入正确的手机号'); return; }
+  if (openid.length < 20) { alert('请粘贴有效的 openid（o 开头 28 位）'); return; }
+  const btn = document.getElementById('unicomOpenIDBtn');
+  btn.disabled = true;
+  btn.textContent = '正在验证 openid...';
+  try {
+    const j = await api('/api/accounts/unicom-openid', { method: 'POST', body: {
+      phone, openid, remark: document.getElementById('addRemark').value.trim()
+    } });
+    if (j.ok) {
+      closeAddModal();
+      loadAccounts();
+    } else {
+      alert(j.error || '登录失败');
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '使用该 OpenID 登录';
+  }
+}
+
+// 联通 ecs_token 登录入口已移除：网关滑块票据被拒（含 hosts 伪装域名方案），
+// 联通添加统一走上方微信小程序 OpenID 通道（/api/accounts/unicom-openid）。
 
 function gotoStep1() {
   const info = carrierInfo(flowCarrier);
@@ -423,6 +472,9 @@ function openAddModal(phone, carrier) {
   document.getElementById('addRemark').value = '';
   document.getElementById('addCode').value = '';
   document.getElementById('addPassword').value = '';
+  document.getElementById('unicomOpenID').value = '';
+  document.getElementById('unicomOpenIDBtn').disabled = false;
+  document.getElementById('unicomOpenIDBtn').textContent = '使用该 OpenID 登录';
   document.getElementById('captchaRetryWrap').hidden = true;
   document.getElementById('telecomCaptchaWrap').hidden = true;
   document.getElementById('telecomCaptcha').value = '';
@@ -509,7 +561,8 @@ async function startLoginFlow() {
   document.getElementById('codeField').style.display = info.needs_sms_code ? 'block' : 'none';
   document.getElementById('submitCodeBtn').style.display = info.needs_sms_code ? '' : 'none';
   document.getElementById('flowStatus').textContent = info.needs_sms_code
-    ? (flowCarrier === 'unicom' ? '正在发送短信验证码...' : '正在启动浏览器...')
+    ? (flowCarrier === 'unicom' ? '正在发送短信验证码...'
+      : flowCarrier === 'cbn' ? '正在连接中国广电网上营业厅...' : '正在启动浏览器...')
     : '正在通过服务密码登录' + info.name + '...';
   document.getElementById('addCode').value = '';
   pollFlow();
@@ -619,7 +672,7 @@ async function submitCode() {
   }
   document.getElementById('flowStatus').textContent = '验证码已提交，等待登录完成...';
 }
-// 电信设备注册：提交图片验证码（后端校验并发送短信验证码）
+// 提交图片验证码（电信设备注册 / 广电登录：后端校验并发送短信验证码）
 async function submitImageCaptcha() {
   const captcha = document.getElementById('telecomCaptcha').value.trim();
   if (!/^[A-Za-z0-9]{3,6}$/.test(captcha)) { alert('请输入图片中的字符'); return; }

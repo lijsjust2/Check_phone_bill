@@ -8,3 +8,6 @@ chinamobile-monitor.exe
 data/
 smoke-data/
 .trae/
+
+# 广电协议临时探测目录（含提取密钥，不进仓库/镜像）
+tmp_gdprobe/

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	_ "chinamobile-monitor/internal/cbn"    // 注册中国广电 Provider
 	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/loggerx"
 	"chinamobile-monitor/internal/mobile"
@@ -64,7 +65,7 @@ func main() {
 }
 
 func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *runner.Runner) {
-	fmt.Printf("三网话费监控 v%s\n", version)
+	fmt.Printf("四网话费监控 v%s\n", version)
 	if abs, err := filepath.Abs(dataDir); err == nil {
 		fmt.Printf("数据目录: %s\n", abs)
 	}
@@ -77,6 +78,8 @@ func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *ru
 		} else if a.CarrierCode() == carrier.Telecom && a.Token != "" {
 			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
 		} else if a.CarrierCode() == carrier.Unicom && a.Cookie != "" {
+			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
+		} else if a.CarrierCode() == carrier.Cbn && a.Cookie != "" {
 			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
 		}
 	}

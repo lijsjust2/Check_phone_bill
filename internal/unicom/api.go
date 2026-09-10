@@ -24,6 +24,7 @@ const (
 	onlineURL   = baseURL + "/mobileService/onLine.htm"
 	flowLeftURL = baseURL + "/servicequerybusiness/operationservice/queryOcsPackageFlowLeftContentRevisedInJune"
 	myInfoURL   = baseURL + "/servicequerybusiness/query/myInformation"
+	balanceURL  = baseURL + "/servicequerybusiness/balancenew/accountBalancenew.htm"
 
 	// 开源项目 unicomvue（github.com/AliYa-chen/unicomvue，活跃维护中）提供的
 	// 公共登录网关：代理联通 ECS 体系「发码 → 腾讯滑块校验 → 短信登录」协议。
@@ -171,6 +172,9 @@ func checkQueryCode(phone, body, scene string) (gjson.Result, error) {
 	}
 	desc := res.Get("desc").Str
 	if desc == "" {
+		desc = res.Get("msg").Str // 话费接口（accountBalancenew）错误文案在 msg 字段
+	}
+	if desc == "" {
 		desc = "未知错误 " + code
 	}
 	return res, fmt.Errorf("%s失败: %s", scene, desc)
@@ -189,6 +193,22 @@ func QueryFlowLeft(ctx context.Context, phone, cookie string, log *loggerx.Logge
 	return res, body, err
 }
 
+// QueryBalance 话费余额查询（accountBalancenew.htm，与余量查询同域同 Cookie 直连，
+// 参考活跃项目 Cyborg2017/ha_unicom_bill 的字段映射：curntbalancecust 当前余额、
+// totalrealfee 本月实时话费；微信小程序域名 mxx.client.10010.com 走 ticket 表单，
+// 本项目 APP 通道直连 m.client.10010.com 复用 ecs_token Cookie）
+func QueryBalance(ctx context.Context, phone, cookie string, log *loggerx.Logger) (gjson.Result, error) {
+	body, err := postWithCookie(ctx, balanceURL, cookie)
+	if err != nil {
+		return gjson.Result{}, fmt.Errorf("话费查询请求失败: %w", err)
+	}
+	if log != nil {
+		log.Info("[%s] 联通话费查询响应: %s", phone, truncate(body, 300))
+	}
+	res, err := checkQueryCode(phone, body, "话费查询")
+	return res, err
+}
+
 // QueryMyInfo 个人信息查询（myInformation，套餐名称尽力读取）
 func QueryMyInfo(ctx context.Context, phone, cookie string, log *loggerx.Logger) string {
 	body, err := postWithCookie(ctx, myInfoURL, cookie)
@@ -203,6 +223,186 @@ func QueryMyInfo(ctx context.Context, phone, cookie string, log *loggerx.Logger)
 		return ""
 	}
 	return res.Get("data.myPackage.productname").Str
+}
+
+// ---------- 微信小程序通道（自托管，不经任何第三方网关） ----------
+// 协议来源：Cyborg2017/ha_unicom_bill（2026-07 仍活跃）。用户在自己电脑的微信里
+// 打开「中国联通」小程序并登录一次，用抓包工具（Reqable/Charles）从 mina.10010.com
+// 请求体中提取 openid 粘贴到面板；此后每次查询：getTicket(openid) 换 ticket →
+// serviceEntrance(ticket) 换 microHall Cookie → mxx 域表单查询话费/余量。
+// 全链路只与联通官方服务器通信；openid 长期有效（无需短信/滑块/心跳维持）。
+
+const (
+	wxMinaBase    = "https://mina.10010.com/wxapplet/weixinNew"
+	wxGetTicket   = wxMinaBase + "/getTicket"
+	wxGoodsList   = wxMinaBase + "/queryGoodsList"
+	wxEntranceURL = "https://mxx.client.10010.com/servicebusiness/wx/serviceEntrance"
+	wxBalanceURL  = "https://mxx.client.10010.com/servicequerybusiness/balancenew/accountBalancenew.htm"
+	wxFlowLeftURL = "https://mxx.client.10010.com/servicequerybusiness/operationservice/queryOcsPackageFlowLeftContentRevisedInJune"
+
+	// 微信 PC 端小程序运行环境 UA（WindowsWechat/WMPF）
+	wxUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+		"Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) " +
+		"NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF"
+)
+
+// wxPostJSON mina 域 JSON POST：该域挂阿里云 WAF，须先 GET 同路径领 acw_tc
+// 会话 cookie 再 POST（curl/schannel 指纹会被拦，Go 标准库指纹可过，已实测）。
+func wxPostJSON(ctx context.Context, rawURL, body string) (string, error) {
+	req0, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+	wxSetCommonHeaders(req0)
+	resp0, err := httpClient.Do(req0)
+	if err != nil {
+		return "", fmt.Errorf("mina 域 WAF 预热失败: %w", err)
+	}
+	io.Copy(io.Discard, resp0.Body)
+	var acw []string
+	for _, c := range resp0.Cookies() {
+		acw = append(acw, c.Name+"="+c.Value)
+	}
+	resp0.Body.Close()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	wxSetCommonHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+	if len(acw) > 0 {
+		req.Header.Set("Cookie", strings.Join(acw, "; "))
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("mina 域请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// wxSetCommonHeaders 微信小程序公共请求头
+func wxSetCommonHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", wxUA)
+	req.Header.Set("Referer", "https://servicewechat.com/wxa03c1c5e73b8e9a8/163/page-frame.html")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+}
+
+// WxGetTicket openid → ticket（code=0000 时 data 即 ticket）
+func WxGetTicket(ctx context.Context, openID string, log *loggerx.Logger) (string, error) {
+	body, err := wxPostJSON(ctx, wxGetTicket, fmt.Sprintf(`{"openId":%q,"channel":"wxmini"}`, openID))
+	if err != nil {
+		return "", err
+	}
+	if log != nil {
+		log.Info("联通微信通道 getTicket 响应: %s", truncate(body, 200))
+	}
+	res := gjson.Parse(body)
+	if code := res.Get("code").Str; code != "0000" {
+		msg := res.Get("msg").Str
+		if msg == "" {
+			msg = "code=" + code
+		}
+		return "", fmt.Errorf("获取 ticket 失败: %s（openid 无效或已过期）", msg)
+	}
+	return res.Get("data").Str, nil
+}
+
+// WxServiceEntrance ticket → microHall Cookie（microHallUser + microHallAccessToken）
+func WxServiceEntrance(ctx context.Context, ticket string, log *loggerx.Logger) (string, error) {
+	u := wxEntranceURL + "?ticket=" + url.QueryEscape(ticket) + "&servicecode=YH10007&ticketChannel=XCXSYHF"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	wxSetCommonHeaders(req)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("serviceEntrance 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	var mhUser, mhToken string
+	for _, c := range resp.Cookies() {
+		switch c.Name {
+		case "microHallUser":
+			mhUser = c.Value
+		case "microHallAccessToken":
+			mhToken = c.Value
+		}
+	}
+	if mhUser == "" || mhToken == "" {
+		return "", fmt.Errorf("serviceEntrance 未返回 microHall Cookie（openid 会话可能已失效）")
+	}
+	return "microHallUser=" + mhUser + "; microHallAccessToken=" + mhToken, nil
+}
+
+// WxQueryGoodsList 查完整号码（openid 绑定校验用，尽力读取）
+func WxQueryGoodsList(ctx context.Context, openID string) (string, error) {
+	body, err := wxPostJSON(ctx, wxGoodsList, fmt.Sprintf(`{"openid":%q,"channel":"wxmini"}`, openID))
+	if err != nil {
+		return "", err
+	}
+	res := gjson.Parse(body)
+	if res.Get("code").Str != "0000" {
+		return "", fmt.Errorf("queryGoodsList 失败: %s", res.Get("msg").Str)
+	}
+	for _, item := range res.Get("data.res").Array() {
+		if n := item.Get("mainNumber").Str; len(n) == 11 && strings.HasPrefix(n, "1") {
+			return n, nil
+		}
+	}
+	return "", nil
+}
+
+// wxQueryForm mxx 域表单查询（话费/余量共用；ticketPhone 为 "wx"+毫秒时间戳的随机串，
+// 服务端凭 ticket 定位会话，不校验真实号码）
+func wxQueryForm(ctx context.Context, rawURL, ticket, ticketPhone, ticketChannel string,
+	extra url.Values, cookie, phone, scene string, log *loggerx.Logger) (gjson.Result, string, error) {
+	form := url.Values{
+		"duanlianjieabc": {""},
+		"channelCode":    {""},
+		"serviceType":    {""},
+		"saleChannel":    {""},
+		"externalSources": {""},
+		"contactCode":    {""},
+		"ticket":         {ticket},
+		"ticketPhone":    {ticketPhone},
+		"ticketChannel":  {ticketChannel},
+		"language":       {"chinese"},
+	}
+	for k, vs := range extra {
+		form[k] = vs
+	}
+	body, _, err := postForm(ctx, rawURL, form, wxUA, cookie)
+	if err != nil {
+		return gjson.Result{}, "", fmt.Errorf("%s请求失败: %w", scene, err)
+	}
+	if log != nil {
+		log.Info("[%s] 联通微信通道%s响应: %s", phone, scene, truncate(body, 300))
+	}
+	res, err := checkQueryCode(phone, body, scene)
+	return res, body, err
+}
+
+// QueryWxBalance 微信通道话费查询（accountBalancenew.htm，XCXSYHF 票据）
+func QueryWxBalance(ctx context.Context, phone, ticket, ticketPhone, cookie string, log *loggerx.Logger) (gjson.Result, error) {
+	res, _, err := wxQueryForm(ctx, wxBalanceURL, ticket, ticketPhone, "XCXSYHF",
+		url.Values{"channel": {"client"}}, cookie, phone, "话费查询", log)
+	return res, err
+}
+
+// QueryWxFlowLeft 微信通道余量查询（queryOcsPackageFlowLeftContentRevisedInJune，
+// XCXYLCXYY 票据；响应结构与 m 域一致，解析复用 ParseFlowLeft）
+func QueryWxFlowLeft(ctx context.Context, phone, ticket, ticketPhone, cookie string, log *loggerx.Logger) (gjson.Result, string, error) {
+	return wxQueryForm(ctx, wxFlowLeftURL, ticket, ticketPhone, "XCXYLCXYY",
+		nil, cookie, phone, "余量查询", log)
 }
 
 // probeWebSendMsg 官网 SendMSG 接口连通性探测（不带滑块票据，服务端应返回 resultCode=7001）
@@ -250,8 +450,10 @@ func gwPost(ctx context.Context, rawURL string, payload map[string]string) (*gwR
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "text/plain;charset=UTF-8")
-	req.Header.Set("Origin", gwBaseURL)
-	req.Header.Set("Referer", gwBaseURL+"/")
+	// 模拟官方演示站前端的跨域形态（浏览器发请求时 Origin 是页面域而非 API 域，
+	// 网关疑似按 Origin 白名单校验 validate）
+	req.Header.Set("Origin", "https://net.2t.hk")
+	req.Header.Set("Referer", "https://net.2t.hk/")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	resp, err := httpClient.Do(req)
 	if err != nil {

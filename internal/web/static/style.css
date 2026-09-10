@@ -161,13 +161,14 @@ body {
 .badge.off { background: #f3f4f6; color: var(--muted); }
 .badge.run { background: #eff6ff; color: var(--primary); }
 
-/* 运营商徽标（移动绿 / 联通蓝 / 电信橙） */
+/* 运营商徽标（移动绿 / 联通蓝 / 电信橙 / 广电红） */
 .badge.carrier-mobile { background: #f0fdf4; color: #16a34a; }
 .badge.carrier-unicom { background: #eff6ff; color: #0052cc; }
 .badge.carrier-telecom { background: #fff7ed; color: #ea580c; }
+.badge.carrier-cbn { background: #fef2f2; color: #dc2626; }
 
 /* 添加账号：运营商选择卡片 */
-.carrier-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0 4px; }
+.carrier-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 12px 0 4px; }
 .carrier-card {
   display: flex; flex-direction: column; align-items: flex-start;
   padding: 12px; border: 1px solid var(--border); border-radius: 8px;

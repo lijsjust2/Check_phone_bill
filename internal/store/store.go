@@ -166,6 +166,7 @@ type Account struct {
 	// 联通专用（短信验证码 HTTP 登录：Token 存 token_online）
 	Cookie string `json:"cookie,omitempty"`
 	AppID  string `json:"app_id,omitempty"`
+	OpenID string `json:"openid,omitempty"` // 联通微信小程序通道（自托管，用户在联通小程序登录后抓包提取，长期有效）
 }
 
 // CarrierCode 规范化运营商代码（"" → "mobile"）

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/push"
 	"chinamobile-monitor/internal/store"
+	"chinamobile-monitor/internal/unicom"
 )
 
 type pageData struct {
@@ -323,6 +325,69 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
 		s.apiFail(w, err.Error())
 		return
 	}
+	s.apiOK(w, nil)
+}
+
+// apiAccountUnicomOpenID 联通微信小程序通道（推荐，自托管）：
+// 用户在自己电脑的微信打开「中国联通」小程序登录一次，用抓包工具（Reqable 等）
+// 提取 mina.10010.com 请求体中的 openid 粘贴至此。全链路仅与联通官方服务器通信，
+// 无滑块/短信/第三方网关；openid 长期有效。
+func (s *Server) apiAccountUnicomOpenID(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAPI(w, r) {
+		return
+	}
+	var req struct {
+		Phone  string `json:"phone"`
+		OpenID string `json:"openid"`
+		Remark string `json:"remark"`
+	}
+	if err := s.decodeBody(r, &req); err != nil {
+		s.apiFail(w, "参数错误")
+		return
+	}
+	req.Phone = strings.TrimSpace(req.Phone)
+	req.OpenID = strings.TrimSpace(req.OpenID)
+	if !store.ValidPhone(req.Phone) {
+		s.apiFail(w, "手机号格式不正确")
+		return
+	}
+	if len(req.OpenID) < 20 {
+		s.apiFail(w, "openid 格式不正确（长度不足）")
+		return
+	}
+
+	// 验证 openid 有效性：换 ticket + 换 microHall Cookie
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ticket, err := unicom.WxGetTicket(ctx, req.OpenID, s.log)
+	if err != nil {
+		s.apiFail(w, "openid 无效: "+err.Error())
+		return
+	}
+	if _, err := unicom.WxServiceEntrance(ctx, ticket, s.log); err != nil {
+		s.apiFail(w, "openid 会话无效: "+err.Error())
+		return
+	}
+	// 号码匹配校验（尽力：接口返回号码时不一致则拒绝）
+	if n, nerr := unicom.WxQueryGoodsList(ctx, req.OpenID); nerr == nil && n != "" && n != req.Phone {
+		s.apiFail(w, "openid 绑定的号码是 "+n[:3]+"****"+n[7:]+"，与填写的号码不一致")
+		return
+	}
+
+	if _, err := s.st.UpsertAccount(req.Phone, "unicom", req.Remark); err != nil {
+		s.apiFail(w, err.Error())
+		return
+	}
+	s.st.UpdateAccount(req.Phone, func(a *store.Account) {
+		a.OpenID = req.OpenID
+		a.HasLoginState = true
+	})
+	s.log.Info("[%s] 联通微信小程序通道添加成功，已触发查询", req.Phone)
+	go func() {
+		if _, err := s.runner.QueryOne(req.Phone); err != nil {
+			s.log.Error("[%s] 查询失败: %v", req.Phone, err)
+		}
+	}()
 	s.apiOK(w, nil)
 }
 

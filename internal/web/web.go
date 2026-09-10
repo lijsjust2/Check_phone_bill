@@ -129,6 +129,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/carriers", s.apiCarriers)
 	mux.HandleFunc("/api/accounts", s.apiAccounts)
 	mux.HandleFunc("/api/accounts/delete", s.apiAccountDelete)
+	mux.HandleFunc("/api/accounts/unicom-openid", s.apiAccountUnicomOpenID)
 	mux.HandleFunc("/api/accounts/edit", s.apiAccountEdit)
 	mux.HandleFunc("/api/query/all", s.apiQueryAll)
 	mux.HandleFunc("/api/query/one", s.apiQueryOne)

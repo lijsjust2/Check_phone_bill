@@ -6,6 +6,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"chinamobile-monitor/internal/carrier"
+	"chinamobile-monitor/internal/store"
 )
 
 // 依据开源脚本（10010v4）解析逻辑构造的余量响应样例
@@ -122,6 +123,44 @@ func TestParseFlowLeftEmpty(t *testing.T) {
 	}
 }
 
+func TestParseBalance(t *testing.T) {
+	// accountBalancenew 响应样例（字段参考 ha_unicom_bill 传感器取值）
+	sample := `{
+	  "code": "0000",
+	  "data": {
+	    "curntbalancecust": "23.45",
+	    "canusefeecustNew": "20.15",
+	    "totalrealfee": "36.80",
+	    "allbowefeecust": "0"
+	  }
+	}`
+	r := &store.QueryResult{}
+	ParseBalance(r, gjson.Parse(sample))
+	if r.Balance != "23.45元" || r.BalanceNum != 23.45 {
+		t.Errorf("Balance = %q/%v", r.Balance, r.BalanceNum)
+	}
+	if r.RealtimeFee != "36.80" {
+		t.Errorf("RealtimeFee = %q", r.RealtimeFee)
+	}
+
+	// 无 data 包裹（顶层即字段）
+	r2 := &store.QueryResult{}
+	ParseBalance(r2, gjson.Parse(`{"code":"0000","curntbalancecust":"-1.2","realfeecustnew":"5"}`))
+	if r2.Balance != "-1.20元" || r2.BalanceNum != -1.2 {
+		t.Errorf("Balance2 = %q/%v", r2.Balance, r2.BalanceNum)
+	}
+	if r2.RealtimeFee != "5.00" {
+		t.Errorf("RealtimeFee2 = %q", r2.RealtimeFee)
+	}
+
+	// 空响应：字段留空，不 panic
+	r3 := &store.QueryResult{}
+	ParseBalance(r3, gjson.Parse(`{}`))
+	if r3.Balance != "" || r3.RealtimeFee != "" {
+		t.Errorf("空响应应留空, got %q/%q", r3.Balance, r3.RealtimeFee)
+	}
+}
+
 func TestSetCookieToCookie(t *testing.T) {
 	sc := "e3d5632b6e5a4f8d=ABC; Domain=.10010.com; Path=/, another=XYZ; Path=/"
 	got := setCookieToCookie(sc)
@@ -146,3 +185,4 @@ func TestFmtGB(t *testing.T) {
 		}
 	}
 }
+

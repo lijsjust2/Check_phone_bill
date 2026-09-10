@@ -4,3 +4,4 @@ smoke-data/
 *.md
 .git/
 docker-compose.yml
+tmp_gdprobe/

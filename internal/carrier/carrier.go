@@ -1,5 +1,5 @@
-// Package carrier 三网运营商统一抽象：登录会话、查询与注册表。
-// mobile/unicom/telecom 各实现包通过 init() 注册 Provider，业务层只依赖本包。
+// Package carrier 运营商统一抽象：登录会话、查询与注册表。
+// mobile/unicom/telecom/cbn 各实现包通过 init() 注册 Provider，业务层只依赖本包。
 package carrier
 
 import (
@@ -12,6 +12,7 @@ const (
 	Mobile  = "mobile"
 	Unicom  = "unicom"
 	Telecom = "telecom"
+	Cbn     = "cbn"
 )
 
 // 登录流程阶段（三家共用，Web 端点轮询展示）
@@ -56,6 +57,7 @@ var carrierNames = map[string]string{
 	Mobile:  "中国移动",
 	Unicom:  "中国联通",
 	Telecom: "中国电信",
+	Cbn:     "中国广电",
 }
 
 // CarrierName 运营商代码 → 中文名；未知代码返回空串
