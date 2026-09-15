@@ -91,16 +91,22 @@ func LaunchBrowser(userDataDir string, headless bool) (*rod.Browser, error) {
 		Set("disable-blink-features", "AutomationControlled")
 	if headless {
 		// Chrome 132+ 移除了旧版 headless，必须使用 new headless 模式
-		l = l.HeadlessNew(true)
+		l = l.HeadlessNew(true).
+			// 容器里 /dev/shm 通常只有 64MB，Chromium 极易崩溃，改用 /tmp
+			Set("disable-dev-shm-usage", "").
+			Set("disable-gpu", "").
+			Set("no-first-run", "")
 	} else {
 		// rod 的 launcher.New() 默认就带 --headless，不显式删掉的话
 		// headless=false 依然启动无头浏览器（用户看不到窗口，登录流程会一直空等）。
 		// --no-startup-window 同理：有头模式必须删掉，否则浏览器进程起来了却不创建窗口。
 		l = l.Headless(false).
 			Delete(flags.Flag("no-startup-window")).
-			Set("window-position", "120,80")
+			Set("window-position", "120,80").
+			Set("start-maximized", "") // 无窗口管理器的虚拟显示下铺满屏幕，方便远程操作
 	}
-	if os.Getenv("BROWSER_NO_SANDBOX") == "1" {
+	// 沙箱：容器/NAS 通常需关闭（root 运行、显式开关、或纯无显示器无头环境）
+	if os.Getenv("BROWSER_NO_SANDBOX") == "1" || os.Getuid() == 0 || os.Getenv("DISPLAY") == "" {
 		l = l.NoSandbox(true)
 	}
 	if bin := findBrowserBin(); bin != "" {

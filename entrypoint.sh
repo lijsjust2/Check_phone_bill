@@ -9,5 +9,11 @@ mkdir -p "$DATA_DIR"
 # 数据目录属主改为容器内 app 用户（uid 1000）
 chown -R app:app "$DATA_DIR" 2>/dev/null || echo "[启动] 警告: 无法修改 $DATA_DIR 属主，若写入失败请检查宿主机目录权限"
 
+# 启用 VNC 虚拟显示栈（Docker/NAS 无头环境的联通滑块登录）
+if [ "${VNC_ENABLED:-0}" = "1" ]; then
+  echo "[启动] 已启用 VNC，启动虚拟显示栈（app 用户）..."
+  su-exec app:app sh /start-vnc.sh &
+fi
+
 # 以 app 用户身份运行主程序
 exec su-exec app:app chinamobile-monitor

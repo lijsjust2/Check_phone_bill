@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -454,7 +455,7 @@ func (s *Server) apiLoginFlowStart(w http.ResponseWriter, r *http.Request) {
 		Password:  strings.TrimSpace(req.Password),
 		AndroidID: androidID,
 		DataDir:   s.dataDir(),
-		Headless:  false,
+		Headless:  req.Carrier != "unicom", // 联通必须弹窗（真实或虚拟显示）；其余运营商全程无头
 		Log:       s.log,
 	}); err != nil {
 		s.apiFail(w, err.Error())
@@ -487,6 +488,12 @@ func (s *Server) apiLoginFlowStatus(w http.ResponseWriter, r *http.Request) {
 		"ok": true, "active": true, "phone": meta.Phone, "carrier": meta.Carrier,
 		"stage": meta.Stage, "stage_text": carrier.StageText(meta.Stage), "msg": meta.Msg,
 	}
+	// 无头 Docker 环境的联通登录：附上 noVNC 远程桌面地址，供用户在本地浏览器里操作滑块
+	if meta.Carrier == "unicom" {
+		if u := s.vncURL(r); u != "" {
+			out["vnc_url"] = u
+		}
+	}
 	// 电信设备注册：need_image_captcha 阶段附带图片验证码（data URI）
 	if meta.Stage == carrier.StageNeedImageCaptcha {
 		if ics, ok := sess.(carrier.ImageCaptchaSession); ok {
@@ -496,6 +503,23 @@ func (s *Server) apiLoginFlowStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, out)
+}
+
+// vncURL 返回 noVNC 远程桌面地址；仅当 VNC_ENABLED=1（Docker/NAS 无头环境）时有效。
+// 联通滑块登录的浏览器跑在容器虚拟显示里，用户通过此地址在本地浏览器远程操作。
+func (s *Server) vncURL(r *http.Request) string {
+	if os.Getenv("VNC_ENABLED") != "1" {
+		return ""
+	}
+	port := os.Getenv("VNC_PORT")
+	if port == "" {
+		port = "6080"
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return fmt.Sprintf("http://%s:%s/vnc.html?path=websockify&autoconnect=true&resize=scale", host, port)
 }
 
 func (s *Server) apiLoginFlowCode(w http.ResponseWriter, r *http.Request) {

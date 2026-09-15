@@ -20,18 +20,23 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/chinamo
 FROM alpine:3.20
 RUN adduser -D -u 1000 app && apk add --no-cache \
     chromium nss freetype harfbuzz ttf-freefont \
-    su-exec tzdata ca-certificates
+    su-exec tzdata ca-certificates \
+    tigervnc novnc websockify
 WORKDIR /app
 COPY --from=builder /out/chinamobile-monitor /usr/local/bin/chinamobile-monitor
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY start-vnc.sh /start-vnc.sh
+RUN chmod +x /entrypoint.sh /start-vnc.sh
 ENV PORT=10086 \
     DATA_DIR=/app/data \
     TZ=Asia/Shanghai \
     BROWSER_BIN=/usr/bin/chromium-browser \
     BROWSER_NO_SANDBOX=1 \
-    HOME=/home/app
+    HOME=/home/app \
+    DISPLAY=:99 \
+    VNC_ENABLED=1 \
+    VNC_PORT=6080
 VOLUME /app/data
-EXPOSE 10086
+EXPOSE 10086 6080
 # 以 root 启动执行 entrypoint（仅用于 chown 数据目录），随后降权为 app 用户
 ENTRYPOINT ["/entrypoint.sh"]

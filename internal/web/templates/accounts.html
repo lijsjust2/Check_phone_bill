@@ -99,6 +99,11 @@
     <!-- step2 验证码 / 登录进度 -->
     <div id="addStep2" style="display:none">
       <p class="muted small" id="flowStatus">正在启动浏览器...</p>
+      <!-- 无头 Docker 环境的联通登录：远程桌面（noVNC）入口 -->
+      <div id="vncWrap" style="display:none;margin-top:10px">
+        <a id="vncLink" class="btn primary" target="_blank" rel="noopener">在浏览器中打开登录窗口（远程桌面）</a>
+        <p class="muted small" style="margin-top:6px">上方按钮会在新标签页打开容器内的浏览器桌面，请在里面完成联通滑块与短信验证；登录成功后会自动关闭，此页面也会自动更新。</p>
+      </div>
       <!-- 图片验证码（电信设备注册 / 广电登录第一步） -->
       <div style="margin-top:12px" id="telecomCaptchaWrap" hidden>
         <div class="field">
@@ -524,12 +529,21 @@ function pollFlow() {
     if (!j.active) {
       // 登录会话已结束：按结束原因提示，避免弹窗停在旧状态
       clearInterval(flowTimer); flowTimer = null;
+      document.getElementById('vncWrap').style.display = 'none';
       if (j.stage === 'success') { flowDone(); return; }
       flowEnded(j);
       return;
     }
     const el = document.getElementById('flowStatus');
     el.textContent = j.stage_text + (j.msg && j.msg !== j.stage_text ? '：' + j.msg : '');
+    // 联通在无头 Docker 环境：展示远程桌面（noVNC）入口
+    const vncWrap = document.getElementById('vncWrap');
+    if (flowCarrier === 'unicom' && j.vnc_url) {
+      document.getElementById('vncLink').href = j.vnc_url;
+      vncWrap.style.display = 'block';
+    } else {
+      vncWrap.style.display = 'none';
+    }
     const done = j.stage === 'success' || j.stage === 'error' || j.stage === 'closed';
     document.getElementById('submitCodeBtn').disabled = done || j.stage === 'submitting';
     // 电信设备注册：need_image_captcha 阶段展示图片验证码
