@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-rod/rod"
 
+	"chinamobile-monitor/internal/browserx"
 	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/loggerx"
 	"chinamobile-monitor/internal/store"
@@ -36,10 +37,10 @@ func StageText(stage string) string {
 // LoginFlow 一次登录会话（CLI 有头 / Web 无头共用），
 // 端口自 Python 版 login()：自动勾协议、填手机号、点验证码、监测登录状态
 type LoginFlow struct {
-	mu     sync.Mutex
-	Phone  string
-	Stage  string
-	Msg    string
+	mu    sync.Mutex
+	Phone string
+	Stage string
+	Msg   string
 
 	codeSubmitted bool // 是否已提交过验证码（浏览器关闭时判断登录态是否可能已保存）
 
@@ -152,14 +153,14 @@ func (f *LoginFlow) run(userDataDir string, headless bool) {
 	browserMu.Lock()
 	defer browserMu.Unlock()
 
-	browser, err := LaunchBrowser(userDataDir, headless)
+	browser, err := browserx.LaunchBrowser(userDataDir, headless)
 	if err != nil {
 		f.setStage(StageError, err.Error())
 		return
 	}
-	defer CloseBrowser(browser, userDataDir)
+	defer browserx.CloseBrowser(browser, userDataDir)
 
-	page, err := NewPage(browser)
+	page, err := browserx.NewPage(browser)
 	if err != nil {
 		f.setStage(StageError, err.Error())
 		return
@@ -175,7 +176,7 @@ func (f *LoginFlow) run(userDataDir string, headless bool) {
 				return
 			case <-time.After(3 * time.Second):
 			}
-			text, err := BodyText(page)
+			text, err := browserx.BodyText(page)
 			if err != nil {
 				// 浏览器已关闭
 				close(browserClosed)

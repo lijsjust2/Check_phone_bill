@@ -58,8 +58,8 @@ type Server struct {
 	faMu    sync.Mutex
 	pending map[string]*pendingCode // username → 2FA 验证码
 
-	limitMu   sync.Mutex
-	failures  map[string]*failRecord // ip → 登录失败计数
+	limitMu  sync.Mutex
+	failures map[string]*failRecord // ip → 登录失败计数
 
 	flows *carrier.SessionManager
 }
@@ -129,15 +129,14 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/carriers", s.apiCarriers)
 	mux.HandleFunc("/api/accounts", s.apiAccounts)
 	mux.HandleFunc("/api/accounts/delete", s.apiAccountDelete)
-	mux.HandleFunc("/api/accounts/unicom-openid", s.apiAccountUnicomOpenID)
 	mux.HandleFunc("/api/accounts/edit", s.apiAccountEdit)
+	mux.HandleFunc("/api/accounts/reorder", s.apiAccountReorder)
 	mux.HandleFunc("/api/query/all", s.apiQueryAll)
 	mux.HandleFunc("/api/query/one", s.apiQueryOne)
 	mux.HandleFunc("/api/query/status", s.apiQueryStatus)
 	mux.HandleFunc("/api/login-flow/start", s.apiLoginFlowStart)
 	mux.HandleFunc("/api/login-flow/status", s.apiLoginFlowStatus)
 	mux.HandleFunc("/api/login-flow/code", s.apiLoginFlowCode)
-	mux.HandleFunc("/api/login-flow/captcha", s.apiLoginFlowCaptcha)
 	mux.HandleFunc("/api/login-flow/image-captcha", s.apiLoginFlowImageCaptcha)
 	mux.HandleFunc("/api/login-flow/cancel", s.apiLoginFlowCancel)
 	mux.HandleFunc("/api/settings", s.apiSettings)
@@ -167,12 +166,11 @@ func secureHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "same-origin")
-		// 放行腾讯验证码（联通登录滑块）：脚本、弹窗 iframe 与图片均来自 captcha.qcloud.com
 		h.Set("Content-Security-Policy",
 			"default-src 'self'; style-src 'self' 'unsafe-inline'; "+
-				"script-src 'self' 'unsafe-inline' https://turing.captcha.qcloud.com; "+
-				"img-src 'self' data: https://*.captcha.qcloud.com https://*.qq.com; "+
-				"frame-src 'self' https://*.captcha.qcloud.com https://ssl.captcha.qq.com; "+
+				"script-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; "+
+				"frame-src 'self'; "+
 				"connect-src 'self'")
 		next.ServeHTTP(w, r)
 	})

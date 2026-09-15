@@ -11,3 +11,12 @@ smoke-data/
 
 # 广电协议临时探测目录（含提取密钥，不进仓库/镜像）
 tmp_gdprobe/
+# 联通接口临时探测目录
+tmp_unicomprobe/
+
+# 运行时日志（服务启动产生）
+run.log
+# 备份 exe
+chinamobile-go.exe~
+# WorkBuddy 内部记忆/工作日志（不进仓库）
+.workbuddy/

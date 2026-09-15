@@ -3,6 +3,7 @@ package cbn
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,8 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 
 	if acc.Cookie == "" || acc.Token == "" {
 		pr.Err = "未登录，请先在面板中添加账号并登录"
+		carrier.MarkNotLoggedIn(pr)
+		pr.LoginExpired = true
 		return pr
 	}
 
@@ -42,6 +45,10 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 	balRes, balRaw, err := client.QueryBalanceFee(ctx, phone, log)
 	if err != nil {
 		pr.Err = err.Error()
+		if errors.Is(err, ErrSessionExpired) {
+			carrier.MarkNotLoggedIn(pr)
+			pr.LoginExpired = true
+		}
 		return pr
 	}
 	pr.Raw["qryBalanceFee"] = balRaw

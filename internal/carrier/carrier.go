@@ -20,8 +20,8 @@ const (
 	StageStarting         = "starting"           // 启动浏览器 / 发起登录
 	StagePageLoading      = "page_loading"       // 打开登录页
 	StageCodeSending      = "code_sending"       // 填手机号 / 发送验证码
-	StageNeedCaptcha      = "need_captcha"       // 需要前端完成腾讯滑块验证（联通网关登录）
-	StageNeedImageCaptcha = "need_image_captcha" // 需要前端输入图片验证码（电信设备注册）
+	StageNeedImageCaptcha = "need_image_captcha" // 需要前端输入图片验证码（电信设备注册/广电登录）
+	StageWaitingUser      = "waiting_user"       // 等待用户在弹出的浏览器窗口中完成登录（联通网页登录）
 	StageWaitingCode      = "waiting_code"       // 等待用户输入短信验证码
 	StageSendFailed       = "send_failed"        // 验证码发送失败（仍可手动输入）
 	StageSubmitting       = "submitting"         // 已提交（验证码已填入 / 密码已提交），等待完成
@@ -34,8 +34,8 @@ var stageText = map[string]string{
 	StageStarting:         "正在启动登录...",
 	StagePageLoading:      "正在打开登录页...",
 	StageCodeSending:      "正在发送验证码...",
-	StageNeedCaptcha:      "需要安全验证，请在弹窗中完成滑块验证",
 	StageNeedImageCaptcha: "需要图片验证码，请输入图片中的字符",
+	StageWaitingUser:      "请在弹出的浏览器窗口中完成登录",
 	StageWaitingCode:      "验证码已发送，请输入收到的短信验证码",
 	StageSendFailed:       "验证码发送失败",
 	StageSubmitting:       "验证码已提交，等待登录完成...",
@@ -81,12 +81,6 @@ type LoginSession interface {
 	CodeSubmitted() bool
 }
 
-// CaptchaSession 需要前端滑块交互的会话（联通网关登录）：
-// 前端轮询到 StageNeedCaptcha 时弹出腾讯滑块，回调票据经 SubmitCaptcha 注入
-type CaptchaSession interface {
-	SubmitCaptcha(ticket, randstr string) error
-}
-
 // ImageCaptchaSession 需要前端图片验证码交互的会话（电信设备注册）：
 // 前端轮询到 StageNeedImageCaptcha 时展示 CaptchaImage 返回的图片，
 // 用户输入的字符经 SubmitImageCaptcha 注入
@@ -103,12 +97,12 @@ type LoginStateSaver interface {
 
 // LoginParams StartLogin 入参
 type LoginParams struct {
-	Phone    string
-	Password string // 电信服务密码；验证码型运营商忽略
+	Phone     string
+	Password  string // 电信服务密码；验证码型运营商忽略
 	AndroidID string // 电信专用：已绑定设备 id（重新登录时复用，跳过设备注册）
-	DataDir  string
-	Headless bool // 浏览器型：Web 面板无头 / CLI 有头
-	Log      *loggerx.Logger
+	DataDir   string
+	Headless  bool // 浏览器型：Web 面板无头 / CLI 有头
+	Log       *loggerx.Logger
 }
 
 // Result 单账号查询产物（各运营商通用）
@@ -121,6 +115,24 @@ type Result struct {
 	// UpdateAccount 查询过程中自愈了登录态（电信 token 失效自动重登续期）时的账号回写回调，
 	// runner 在查询返回后应用；nil 表示无需回写
 	UpdateAccount func(a *store.Account)
+	// LoginExpired 本次失败属于「登录态已失效」（非网络抖动、非业务限流）。
+	// runner 会据此发专用「登录态失效」推送，不受 alert_only 开关影响。
+	LoginExpired bool
+}
+
+// MarkNotLoggedIn 查询过程中确认登录态已失效时调用：runner 会把账号置回「未登录」。
+//
+// 不这样做的话 HasLoginState 只在登录成功时置 true，会话静默过期后列表仍显示绿色
+// 「已登录」，只有 last_error 里能看到查询失败——面板状态与真实可用性不一致。
+// 与已有回写回调组合（如电信重登后写回新 token），不会互相覆盖。
+func MarkNotLoggedIn(pr *Result) {
+	prev := pr.UpdateAccount
+	pr.UpdateAccount = func(a *store.Account) {
+		if prev != nil {
+			prev(a)
+		}
+		a.HasLoginState = false
+	}
 }
 
 // Provider 运营商接入抽象

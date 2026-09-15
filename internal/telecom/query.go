@@ -24,6 +24,8 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 
 	if acc.Token == "" {
 		pr.Err = "未登录，请先在面板中添加账号并登录"
+		carrier.MarkNotLoggedIn(pr)
+		pr.LoginExpired = true
 		return pr
 	}
 
@@ -40,7 +42,9 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 	// token 失效 → 存量密码自动重登一次（自愈；androidId 复用已绑定设备）
 	if resp.Expired {
 		if acc.Password == "" {
-			pr.Err = ErrTokenExpired.Error() + "，请重新登录"
+			pr.Err = ErrTokenExpired.Error() + "，请重新登录（未保存服务密码，无法自动重登）"
+			carrier.MarkNotLoggedIn(pr)
+			pr.LoginExpired = true
 			return pr
 		}
 		if log != nil {
@@ -49,6 +53,8 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 		state, err := DoLogin(ctx, phone, acc.Password, acc.AndroidID, log)
 		if err != nil {
 			pr.Err = "自动重登失败: " + err.Error()
+			carrier.MarkNotLoggedIn(pr)
+			pr.LoginExpired = true
 			return pr
 		}
 		newToken, province, city := state.Token, state.ProvinceCode, state.CityCode
@@ -66,6 +72,8 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 		pr.Raw["qryImportantData"] = resp.Raw
 		if resp.Expired {
 			pr.Err = "重新登录后 token 仍无效，请检查账号状态"
+			carrier.MarkNotLoggedIn(pr)
+			pr.LoginExpired = true
 			return pr
 		}
 	}

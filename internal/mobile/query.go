@@ -7,17 +7,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
 
+	"chinamobile-monitor/internal/browserx"
+	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/loggerx"
 	"chinamobile-monitor/internal/store"
 )
@@ -25,7 +24,6 @@ import (
 const (
 	loginURL = "https://wx.10086.cn/website/bind/bindAccount/new"
 	homeURL  = "https://wx.10086.cn/website/spa/main/newHome"
-	uaLegacy = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 	queryTimeout = 120 * time.Second
 )
@@ -35,185 +33,6 @@ const (
 var browserMu sync.Mutex
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
-
-// findBrowserBin 按优先级查找可用的 Chromium 内核浏览器：
-//  1. BROWSER_BIN 环境变量（用户显式指定）
-//  2. 系统已安装的 Chrome / Edge / Chromium（常见安装路径）
-//  3. rod 缓存目录中已下载的浏览器
-//  返回空字符串表示都没找到，此时 rod 会自动下载
-func findBrowserBin() string {
-	if bin := strings.TrimSpace(os.Getenv("BROWSER_BIN")); bin != "" {
-		return bin
-	}
-	for _, candidate := range systemBrowserCandidates() {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	if p, _ := launcher.LookPath(); p != "" {
-		return p
-	}
-	return ""
-}
-
-// systemBrowserCandidates 返回各平台常见的 Chromium 内核浏览器安装路径
-func systemBrowserCandidates() []string {
-	switch runtime.GOOS {
-	case "windows":
-		return []string{
-			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
-			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
-			`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
-			`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
-			`C:\Program Files\Chromium\Application\chrome.exe`,
-		}
-	case "darwin":
-		return []string{
-			`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
-			`/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge`,
-			`/Applications/Chromium.app/Contents/MacOS/Chromium`,
-		}
-	default: // linux
-		return []string{
-			`/usr/bin/google-chrome`,
-			`/usr/bin/google-chrome-stable`,
-			`/usr/bin/chromium`,
-			`/usr/bin/chromium-browser`,
-			`/usr/bin/microsoft-edge`,
-		}
-	}
-}
-
-// LaunchBrowser 按项目约定启动 Chromium（复用登录态目录）
-func LaunchBrowser(userDataDir string, headless bool) (*rod.Browser, error) {
-	// 先清理该目录下残留的浏览器进程（上次异常退出留下的，会锁住 profile 文件）
-	killStaleBrowser(userDataDir)
-
-	l := launcher.New().
-		// 禁用 leakless 包装进程：PID() 才是真正的 Chrome 主进程 PID，
-		// 我们用自己的 PID 文件做残留清理（服务启动时 / 备份导入前）
-		Leakless(false).
-		UserDataDir(userDataDir).
-		Set("user-agent", uaLegacy).
-		Set("window-size", "1280,900").
-		Set("lang", "zh-CN").
-		Set("disable-blink-features", "AutomationControlled")
-	if headless {
-		// Chrome 132+ 移除了旧版 headless，必须使用 new headless 模式
-		l = l.HeadlessNew(true)
-	}
-	if os.Getenv("BROWSER_NO_SANDBOX") == "1" {
-		l = l.NoSandbox(true)
-	}
-	if bin := findBrowserBin(); bin != "" {
-		l = l.Bin(bin)
-	}
-	controlURL, err := l.Launch()
-	if err != nil {
-		return nil, fmt.Errorf("启动浏览器失败: %w", err)
-	}
-	// 记录浏览器 PID（异常退出时下次启动可清理残留进程）
-	if pid := l.PID(); pid > 0 {
-		_ = os.WriteFile(browserPidFile(userDataDir), []byte(strconv.Itoa(pid)), 0o600)
-	}
-	browser := rod.New().ControlURL(controlURL)
-	if err := browser.Connect(); err != nil {
-		return nil, fmt.Errorf("连接浏览器失败: %w", err)
-	}
-	return browser, nil
-}
-
-// CloseBrowser 关闭浏览器并确保整个进程树退出（否则 user-data 目录被锁，影响备份导入等操作）
-func CloseBrowser(b *rod.Browser, userDataDir string) {
-	if b == nil {
-		return
-	}
-	_ = b.Close() // 发送 CDP 关闭命令（优雅退出）
-
-	pidFile := browserPidFile(userDataDir)
-	b2, err := os.ReadFile(pidFile)
-	if err != nil {
-		return
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b2)))
-	if err != nil || pid <= 0 {
-		_ = os.Remove(pidFile)
-		return
-	}
-	// 给浏览器自然退出的时间（Windows 上 Chrome 退出是异步的）
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if !processAlive(pid) {
-			break
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	// 无条件结束整个进程树：主进程退出不代表 crashpad 等子进程退出
-	// （它们继承 user-data 文件句柄，残留会锁住目录；杀已退出进程树无害）
-	killProcessTree(pid)
-	time.Sleep(800 * time.Millisecond) // 等内核释放文件句柄
-	_ = os.Remove(pidFile)
-}
-
-// processAlive 见 proc_windows.go / proc_unix.go（平台实现）
-
-// browserPidFile PID 记录文件路径（隐藏在 user-data 目录内）
-func browserPidFile(userDataDir string) string {
-	return filepath.Join(userDataDir, ".browser.pid")
-}
-
-// killStaleBrowser 杀掉记录的残留浏览器进程树并删除记录
-func killStaleBrowser(userDataDir string) {
-	pidFile := browserPidFile(userDataDir)
-	b, err := os.ReadFile(pidFile)
-	if err != nil {
-		return
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || pid <= 0 {
-		_ = os.Remove(pidFile)
-		return
-	}
-	killProcessTree(pid)
-	// 给浏览器进程一点退出时间，避免后续启动锁冲突
-	time.Sleep(800 * time.Millisecond)
-	_ = os.Remove(pidFile)
-}
-
-// KillStaleBrowsers 清理 dataDir 下所有账号的残留浏览器进程
-// （服务启动时 / 备份导入前调用）
-func KillStaleBrowsers(dataDir string) {
-	entries, err := os.ReadDir(filepath.Join(dataDir, "accounts"))
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			killStaleBrowser(store.UserDataDir(dataDir, e.Name()))
-		}
-	}
-}
-
-// NewPage 新建标签页并设置视口
-func NewPage(b *rod.Browser) (*rod.Page, error) {
-	page, err := b.Page(proto.TargetCreateTarget{})
-	if err != nil {
-		return nil, err
-	}
-	_ = page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
-		Width: 1280, Height: 900, DeviceScaleFactor: 1, Mobile: false,
-	})
-	return page, nil
-}
-
-// BodyText 读取页面 innerText
-func BodyText(p *rod.Page) (string, error) {
-	res, err := p.Eval(`() => document.body.innerText`)
-	if err != nil {
-		return "", err
-	}
-	return res.Value.Str(), nil
-}
 
 // EnsureUserDataDir 返回登录态目录；不存在时尝试从 Python 版目录迁移
 func EnsureUserDataDir(dataDir, phone string, log *loggerx.Logger) (string, bool, error) {
@@ -318,14 +137,14 @@ func QueryPhone(phone, dataDir string, log *loggerx.Logger) *PhoneResult {
 		log.Info("[%s] 开始查询（复用登录态 %s）", phone, userDataDir)
 	}
 
-	browser, err := LaunchBrowser(userDataDir, true)
+	browser, err := browserx.LaunchBrowser(userDataDir, true)
 	if err != nil {
 		pr.Err = err.Error()
 		return pr
 	}
-	defer CloseBrowser(browser, userDataDir)
+	defer browserx.CloseBrowser(browser, userDataDir)
 
-	page, err := NewPage(browser)
+	page, err := browserx.NewPage(browser)
 	if err != nil {
 		pr.Err = err.Error()
 		return pr
@@ -361,16 +180,22 @@ func QueryPhone(phone, dataDir string, log *loggerx.Logger) *PhoneResult {
 	_ = page.WaitIdle(30 * time.Second)
 	time.Sleep(5 * time.Second)
 
-	pageText, err := BodyText(page)
+	pageText, err := browserx.BodyText(page)
 	if err != nil {
 		pr.Err = "读取页面失败: " + err.Error()
 		return pr
 	}
 
-	// 登录状态检查（与 Python 版一致：页面出现套餐相关字样视为已登录）
-	if !strings.Contains(pageText, "动感地带") && !strings.Contains(pageText, "青春卡") && !strings.Contains(pageText, "套餐") {
-		pr.Err = fmt.Sprintf("登录状态已过期，请重新登录 %s", phone)
-		return pr
+	// 登录状态检查：检测"未登录"特征词（比正向关键词更可靠，
+	// 避免因套餐名不含"动感地带/青春卡/套餐"等特定词汇而误判过期）
+	notLoggedInKeywords := []string{"请登录", "立即登录", "用户登录", "账号密码登录", "验证码登录"}
+	for _, kw := range notLoggedInKeywords {
+		if strings.Contains(pageText, kw) {
+			pr.Err = fmt.Sprintf("登录状态已过期，请重新登录 %s", phone)
+			carrier.MarkNotLoggedIn(pr)
+			pr.LoginExpired = true
+			return pr
+		}
 	}
 
 	// getMainPlan 未拦截到时，用页面内 fetch 兜底
@@ -402,6 +227,23 @@ func QueryPhone(phone, dataDir string, log *loggerx.Logger) *PhoneResult {
 		pr.Raw[k] = v
 	}
 	mu.Unlock()
+
+	// 关键接口（getMainPlan/getMarginQueryInfo/getNewMarginInfo）正常应返回加密 hex 数据；
+	// 若返回 HTML（如移动"系统优化升级/升级公告"页面），说明登录态已失效或移动侧临时维护，
+	// 按登录失效处理（避免解析失败显示"余额 未知"误导用户）
+	for _, name := range []string{"getMainPlan", "getMarginQueryInfo", "getNewMarginInfo"} {
+		body := pr.Raw[name]
+		if body == "" || IsHexBody(body) {
+			continue
+		}
+		if strings.Contains(body, "<html") || strings.Contains(body, "升级公告") ||
+			strings.Contains(body, "系统优化升级") || strings.Contains(body, "请登录") {
+			pr.Err = fmt.Sprintf("登录状态已过期，请重新登录 %s", phone)
+			carrier.MarkNotLoggedIn(pr)
+			pr.LoginExpired = true
+			return pr
+		}
+	}
 
 	pr.Result = ParseResults(bodies, pageText)
 	pr.Result.QueriedAt = time.Now().Format("2006-01-02 15:04:05")

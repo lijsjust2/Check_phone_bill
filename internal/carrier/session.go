@@ -111,21 +111,6 @@ func (m *SessionManager) SubmitCode(code string) error {
 	return sess.SubmitCode(code)
 }
 
-// SubmitCaptcha 向活跃会话提交滑块票据（仅联通网关登录会话支持）
-func (m *SessionManager) SubmitCaptcha(ticket, randstr string) error {
-	m.mu.Lock()
-	sess := m.session
-	m.mu.Unlock()
-	if sess == nil {
-		return fmt.Errorf("当前没有进行中的登录会话")
-	}
-	cs, ok := sess.(CaptchaSession)
-	if !ok {
-		return fmt.Errorf("当前登录会话不需要滑块验证")
-	}
-	return cs.SubmitCaptcha(ticket, randstr)
-}
-
 // SubmitImageCaptcha 向活跃会话提交图片验证码（仅电信设备注册会话支持）
 func (m *SessionManager) SubmitImageCaptcha(captcha string) error {
 	m.mu.Lock()

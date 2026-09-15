@@ -17,7 +17,7 @@ const (
 	apiGwLogin        = "/api/login/gwLogin"           // 登录（短信码/服务密码）
 	apiBalanceFee     = "/api/busi/qryBalanceFee"      // 话费余额
 	apiPhonePackInfo  = "/api/busi/qryPhonePackInfo"   // 套餐信息
-	apiUserRes        = "/api/busi/qryUserRes"        // 余量（流量/语音/短信资源列表）
+	apiUserRes        = "/api/busi/qryUserRes"         // 余量（流量/语音/短信资源列表）
 	apiBillInfo       = "/api/busi/qryBillInfo"        // 账单
 	apiNumberOwner    = "/api/busi/qryNumberOwnership" // 归属地省份列表（公开）
 )
@@ -52,7 +52,7 @@ func (c *Client) FetchImageCaptcha(ctx context.Context) (string, error) {
 // SendSmsCode 发送短信验证码（type 5 = 登录验证码）
 func (c *Client) SendSmsCode(ctx context.Context, phone string, log *loggerx.Logger) error {
 	resp, err := c.callAPI(ctx, apiGetVerifyCode, map[string]interface{}{
-		"channelId": ChannelID,
+		"channelId":  ChannelID,
 		"recieveNum": phone,
 		"type":       5,
 	})

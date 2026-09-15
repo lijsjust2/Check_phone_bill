@@ -1,6 +1,6 @@
 //go:build !windows
 
-package mobile
+package browserx
 
 import (
 	"os"

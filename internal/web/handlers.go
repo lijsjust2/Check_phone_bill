@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"chinamobile-monitor/internal/carrier"
 	"chinamobile-monitor/internal/push"
 	"chinamobile-monitor/internal/store"
-	"chinamobile-monitor/internal/unicom"
 )
 
 type pageData struct {
@@ -190,6 +188,20 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// validQueryTime 校验 HH:MM 或逗号分隔的多个 HH:MM，至少一项有效即通过
+func validQueryTime(s string) bool {
+	got := 0
+	for _, p := range strings.Split(s, ",") {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if _, err := time.ParseInLocation("15:04", strings.TrimSpace(p), time.Local); err == nil {
+			got++
+		}
+	}
+	return got > 0
+}
+
 func (s *Server) apiFail(w http.ResponseWriter, msg string) {
 	writeJSON(w, map[string]interface{}{"ok": false, "error": msg})
 }
@@ -328,69 +340,6 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
 	s.apiOK(w, nil)
 }
 
-// apiAccountUnicomOpenID 联通微信小程序通道（推荐，自托管）：
-// 用户在自己电脑的微信打开「中国联通」小程序登录一次，用抓包工具（Reqable 等）
-// 提取 mina.10010.com 请求体中的 openid 粘贴至此。全链路仅与联通官方服务器通信，
-// 无滑块/短信/第三方网关；openid 长期有效。
-func (s *Server) apiAccountUnicomOpenID(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAPI(w, r) {
-		return
-	}
-	var req struct {
-		Phone  string `json:"phone"`
-		OpenID string `json:"openid"`
-		Remark string `json:"remark"`
-	}
-	if err := s.decodeBody(r, &req); err != nil {
-		s.apiFail(w, "参数错误")
-		return
-	}
-	req.Phone = strings.TrimSpace(req.Phone)
-	req.OpenID = strings.TrimSpace(req.OpenID)
-	if !store.ValidPhone(req.Phone) {
-		s.apiFail(w, "手机号格式不正确")
-		return
-	}
-	if len(req.OpenID) < 20 {
-		s.apiFail(w, "openid 格式不正确（长度不足）")
-		return
-	}
-
-	// 验证 openid 有效性：换 ticket + 换 microHall Cookie
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	ticket, err := unicom.WxGetTicket(ctx, req.OpenID, s.log)
-	if err != nil {
-		s.apiFail(w, "openid 无效: "+err.Error())
-		return
-	}
-	if _, err := unicom.WxServiceEntrance(ctx, ticket, s.log); err != nil {
-		s.apiFail(w, "openid 会话无效: "+err.Error())
-		return
-	}
-	// 号码匹配校验（尽力：接口返回号码时不一致则拒绝）
-	if n, nerr := unicom.WxQueryGoodsList(ctx, req.OpenID); nerr == nil && n != "" && n != req.Phone {
-		s.apiFail(w, "openid 绑定的号码是 "+n[:3]+"****"+n[7:]+"，与填写的号码不一致")
-		return
-	}
-
-	if _, err := s.st.UpsertAccount(req.Phone, "unicom", req.Remark); err != nil {
-		s.apiFail(w, err.Error())
-		return
-	}
-	s.st.UpdateAccount(req.Phone, func(a *store.Account) {
-		a.OpenID = req.OpenID
-		a.HasLoginState = true
-	})
-	s.log.Info("[%s] 联通微信小程序通道添加成功，已触发查询", req.Phone)
-	go func() {
-		if _, err := s.runner.QueryOne(req.Phone); err != nil {
-			s.log.Error("[%s] 查询失败: %v", req.Phone, err)
-		}
-	}()
-	s.apiOK(w, nil)
-}
-
 // ---------- 查询 ----------
 
 func (s *Server) apiQueryAll(w http.ResponseWriter, r *http.Request) {
@@ -408,7 +357,9 @@ func (s *Server) apiQueryOne(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAPI(w, r) {
 		return
 	}
-	var req struct{ Phone string `json:"phone"` }
+	var req struct {
+		Phone string `json:"phone"`
+	}
 	if err := s.decodeBody(r, &req); err != nil || req.Phone == "" {
 		s.apiFail(w, "参数错误")
 		return
@@ -426,10 +377,13 @@ func (s *Server) apiQueryOne(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiQueryStatus(w http.ResponseWriter, r *http.Request) {
-	running, startedAt := s.runner.Status()
+	running, startedAt, currentPhone := s.runner.Status()
 	out := map[string]interface{}{"ok": true, "running": running}
 	if running {
 		out["started_at"] = startedAt.Format("2006-01-02 15:04:05")
+		if currentPhone != "" {
+			out["current_phone"] = currentPhone
+		}
 	}
 	writeJSON(w, out)
 }
@@ -548,32 +502,14 @@ func (s *Server) apiLoginFlowCode(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAPI(w, r) {
 		return
 	}
-	var req struct{ Code string `json:"code"` }
+	var req struct {
+		Code string `json:"code"`
+	}
 	if err := s.decodeBody(r, &req); err != nil {
 		s.apiFail(w, "参数错误")
 		return
 	}
 	if err := s.flows.SubmitCode(req.Code); err != nil {
-		s.apiFail(w, err.Error())
-		return
-	}
-	s.apiOK(w, nil)
-}
-
-// apiLoginFlowCaptcha 联通滑块票据提交（前端 TencentCaptcha 回调后调用）
-func (s *Server) apiLoginFlowCaptcha(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAPI(w, r) {
-		return
-	}
-	var req struct {
-		Ticket  string `json:"ticket"`
-		Randstr string `json:"randstr"`
-	}
-	if err := s.decodeBody(r, &req); err != nil {
-		s.apiFail(w, "参数错误")
-		return
-	}
-	if err := s.flows.SubmitCaptcha(req.Ticket, req.Randstr); err != nil {
 		s.apiFail(w, err.Error())
 		return
 	}
@@ -622,8 +558,9 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		s.apiFail(w, "参数错误")
 		return
 	}
-	if _, err := time.ParseInLocation("15:04", req.QueryTime, time.Local); err != nil {
-		s.apiFail(w, "查询时间格式应为 HH:MM")
+	// 查询时间：HH:MM 单个或英文逗号分隔的多个（如 "08:00,20:00"，兼作保活）
+	if !validQueryTime(req.QueryTime) {
+		s.apiFail(w, "查询时间格式应为 HH:MM，多个时间用英文逗号分隔，如 08:00,20:00")
 		return
 	}
 	if req.Push.BarkEnabled && strings.TrimSpace(req.Push.BarkKey) == "" {
@@ -728,6 +665,29 @@ func (s *Server) apiPassword(w http.ResponseWriter, r *http.Request) {
 
 // ---------- 账号编辑 / 删除 ----------
 
+func (s *Server) apiAccountReorder(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAPI(w, r) {
+		return
+	}
+	var req struct {
+		Phone string `json:"phone"`
+		Dir   string `json:"dir"` // "up" | "down"
+	}
+	if err := s.decodeBody(r, &req); err != nil || (req.Dir != "up" && req.Dir != "down") {
+		s.apiFail(w, "参数错误")
+		return
+	}
+	if s.st.GetAccount(req.Phone) == nil {
+		s.apiFail(w, "账号不存在")
+		return
+	}
+	if !s.st.MoveAccountOrder(req.Phone, req.Dir) {
+		s.apiFail(w, "已在边缘位置或保存失败")
+		return
+	}
+	s.apiOK(w, nil)
+}
+
 func (s *Server) apiAccountEdit(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAPI(w, r) {
 		return
@@ -754,7 +714,9 @@ func (s *Server) apiAccountDelete(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAPI(w, r) {
 		return
 	}
-	var req struct{ Phone string `json:"phone"` }
+	var req struct {
+		Phone string `json:"phone"`
+	}
 	if err := s.decodeBody(r, &req); err != nil {
 		s.apiFail(w, "参数错误")
 		return
@@ -844,10 +806,10 @@ func (s *Server) apiDailyList(w http.ResponseWriter, r *http.Request) {
 	diffs := buildDiffs(all)
 
 	type dayRow struct {
-		Date      string  `json:"date"`
-		Count     int     `json:"count"`
-		Fee       string  `json:"fee"`
-		Flow      string  `json:"flow"`
+		Date      string `json:"date"`
+		Count     int    `json:"count"`
+		Fee       string `json:"fee"`
+		Flow      string `json:"flow"`
 		feeSum    float64
 		feeCount  int
 		flowSum   float64
@@ -957,8 +919,8 @@ func (s *Server) apiDailyByPhone(w http.ResponseWriter, r *http.Request) {
 
 	type row struct {
 		Date         string           `json:"date"`
-		Fee          string           `json:"fee"`       // 昨日扣款（元）：今日余额 − 昨日余额
-		Flow         string           `json:"flow"`      // 昨日流量增量（GB）：今日已用 − 昨日已用
+		Fee          string           `json:"fee"`        // 昨日扣款（元）：今日余额 − 昨日余额
+		Flow         string           `json:"flow"`       // 昨日流量增量（GB）：今日已用 − 昨日已用
 		VoiceDiff    string           `json:"voice_diff"` // 昨日语音增量（分钟）
 		Balance      string           `json:"balance"`
 		RealtimeFee  string           `json:"realtime_fee"`

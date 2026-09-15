@@ -73,11 +73,11 @@ func TestExtractBalance(t *testing.T) {
 
 func TestParseResults(t *testing.T) {
 	bodies := map[string]string{
-		"fareBalance":           `{"data":{"realFeeQryRsp":{"curFeeTotal":"18.30","realFee":"5.20","oweFee":"0.00"}}}`,
-		"getMainPlan":           pythonLikeEncrypt(`{"object":{"resultData":{"curPlanName":"移动花卡宝藏版"}}}`),
-		"getCustBaseInfo":       `{"bean":{"data":{"customerAssignment":"北京"}}}`,
-		"getNewMarginInfo":      `{"data":{"resultData":{"planRemianFlowInfo":{"planRemian":{"usedNum":"6.15","remainNum":"23.85","sumNum":"30","unit":"04"},"directionalFlowInfo":{"usedNum":"0","remainNum":"30","sumNum":"30","unit":"04"},"otherRemian":{"usedNum":"1","remainNum":"9","sumNum":"10","unit":"03"},"totalInfo":{"usedNum":"6.65","remainNum":"53.35","sumNum":"60","unit":"04"}},"planRemianVoiceInfo":{"planRemian":{"usedNum":"120","remainNum":"80","sumNum":"200","unit":"01"}},"planRemianMSGInfo":{"totalInfo":{"usedNum":"5","remainNum":"95","sumNum":"100","unit":"02"}}}}}`,
-		"getBillSum":            `{"object":{"resultData":{"cycleBeginDate":"2026-09-01","cycleEndDate":"2026-09-30","toatlBill":"39.00","realBillSum":"31.20","costSaveDetails":{"costSaveTotal":"7.80"}}}}`,
+		"fareBalance":            `{"data":{"realFeeQryRsp":{"curFeeTotal":"18.30","realFee":"5.20","oweFee":"0.00"}}}`,
+		"getMainPlan":            pythonLikeEncrypt(`{"object":{"resultData":{"curPlanName":"移动花卡宝藏版"}}}`),
+		"getCustBaseInfo":        `{"bean":{"data":{"customerAssignment":"北京"}}}`,
+		"getNewMarginInfo":       `{"data":{"resultData":{"planRemianFlowInfo":{"planRemian":{"usedNum":"6.15","remainNum":"23.85","sumNum":"30","unit":"04"},"directionalFlowInfo":{"usedNum":"0","remainNum":"30","sumNum":"30","unit":"04"},"otherRemian":{"usedNum":"1","remainNum":"9","sumNum":"10","unit":"03"},"totalInfo":{"usedNum":"6.65","remainNum":"53.35","sumNum":"60","unit":"04"}},"planRemianVoiceInfo":{"planRemian":{"usedNum":"120","remainNum":"80","sumNum":"200","unit":"01"}},"planRemianMSGInfo":{"totalInfo":{"usedNum":"5","remainNum":"95","sumNum":"100","unit":"02"}}}}}`,
+		"getBillSum":             `{"object":{"resultData":{"cycleBeginDate":"2026-09-01","cycleEndDate":"2026-09-30","toatlBill":"39.00","realBillSum":"31.20","costSaveDetails":{"costSaveTotal":"7.80"}}}}`,
 		"accountFeeBalanceQuery": `{"data":{"realFeeQryRsp":{"realFee":"5.20"}}}`,
 	}
 	r := ParseResults(bodies, "")

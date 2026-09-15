@@ -34,7 +34,7 @@ type cbnSession struct {
 	state       *LoginState // 登录成功产物（SaveLogin 用）
 	captchaImg  string      // 当前图片验证码 data URI
 	smsSent     bool        // 短信已发送（短信码错误重试时不重复发码）
-	lastCaptcha string     // 当前图片验证码对应的输入（gwLogin 需回填）
+	lastCaptcha string      // 当前图片验证码对应的输入（gwLogin 需回填）
 }
 
 // StartLogin 启动广电短信验证码登录会话

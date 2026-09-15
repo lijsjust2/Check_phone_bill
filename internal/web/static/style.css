@@ -140,7 +140,12 @@ body {
   border-bottom: 1px dashed #c7cdd6;
 }
 .phone-toggle:hover { color: var(--primary); border-bottom-color: var(--primary); }
-.row-ops { display: inline-flex; gap: 6px; }
+.row-ops { display: inline-flex; gap: 6px; align-items: center; }
+
+/* 排序小按钮（列表内上移/下移） */
+.icon-btn { padding: 4px 8px; font-size: 12px; line-height: 1; border: 1px solid var(--line, rgba(16,35,29,.16)); background: var(--card, #fff); border-radius: 8px; cursor: pointer; color: inherit; }
+.icon-btn:hover:not(:disabled) { border-color: var(--accent, #16a34a); color: var(--accent, #16a34a); }
+.icon-btn:disabled { opacity: .35; cursor: default; }
 .remark-pill {
   display: inline-block; padding: 1px 8px; border-radius: 999px;
   background: #eff6ff; color: var(--primary); font-size: 12px;

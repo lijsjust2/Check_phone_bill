@@ -23,6 +23,7 @@
     <table class="table acc-table">
       <thead>
         <tr>
+          <th>排序</th>
           <th>备注</th>
           <th>手机号码</th>
           <th>运营商</th>
@@ -53,7 +54,7 @@
         </button>
         <button type="button" class="carrier-card" data-carrier="unicom" onclick="selectCarrier('unicom')">
           <span class="carrier-name">中国联通</span>
-          <span class="muted small">短信验证码登录</span>
+          <span class="muted small">网页浏览器登录</span>
         </button>
         <button type="button" class="carrier-card" data-carrier="telecom" onclick="selectCarrier('telecom')">
           <span class="carrier-name">中国电信</span>
@@ -88,13 +89,6 @@
           <label>备注（可选）</label>
           <input id="addRemark" maxlength="30" placeholder="如：主号">
         </div>
-        <!-- 联通：微信小程序通道（ha_unicom_bill 协议，openid 长期有效） -->
-        <div class="field" id="unicomOpenIDField" style="display:none">
-          <label>微信 OpenID 登录（小程序抓包获取，长期有效）</label>
-          <input id="unicomOpenID" maxlength="64" autocomplete="off" autocapitalize="none" placeholder="粘贴抓包获取的 openid（o 开头 28 位）">
-          <button type="button" class="btn" style="width:100%;margin-top:8px" id="unicomOpenIDBtn" onclick="submitUnicomOpenID()">使用该 OpenID 登录</button>
-          <p class="muted small" style="margin-top:6px">获取步骤：① 电脑安装 Reqable（reqable.com，免费）并开始抓包；② 电脑微信打开「中国联通」小程序并登录一次；③ 在 Reqable 中筛选 mina.10010.com，任选一个请求，从请求体 JSON 中复制 openid 粘贴到此处。全程仅与联通官方服务器通信</p>
-        </div>
         <p class="muted small" id="step1Hint">点击「发送验证码」后，系统将打开登录页并自动填写手机号</p>
       </div>
       <div class="modal-btns">
@@ -105,9 +99,6 @@
     <!-- step2 验证码 / 登录进度 -->
     <div id="addStep2" style="display:none">
       <p class="muted small" id="flowStatus">正在启动浏览器...</p>
-      <div style="margin-top:10px" id="captchaRetryWrap" hidden>
-        <button type="button" class="btn" style="width:100%" id="captchaRetryBtn" onclick="showUnicomCaptcha()">点击完成滑块验证</button>
-      </div>
       <!-- 图片验证码（电信设备注册 / 广电登录第一步） -->
       <div style="margin-top:12px" id="telecomCaptchaWrap" hidden>
         <div class="field">
@@ -215,12 +206,20 @@ async function loadAccounts() {
   document.getElementById('emptyTip').style.display = list.length ? 'none' : 'block';
   document.getElementById('listCard').style.display = list.length ? 'block' : 'none';
   tbody.innerHTML = '';
-  for (const a of list) tbody.appendChild(renderRow(a));
+  list.forEach((a, i) => tbody.appendChild(renderRow(a, i, list.length)));
+}
+
+// 调整账号顺序（dir: up/down），成功后刷新列表
+async function moveAccount(phone, dir) {
+  const j = await api('/api/accounts/reorder', { method: 'POST', body: { phone, dir } });
+  if (!j.ok) { showError(j.error); return; }
+  await loadAccounts();
 }
 
 function statusBadge(a) {
   const badge = document.createElement('span');
-  if (!a.has_login_state) { badge.className = 'badge off'; badge.textContent = '未登录'; }
+  if (queryingPhone && a.phone === queryingPhone) { badge.className = 'badge run'; badge.textContent = '查询中'; }
+  else if (!a.has_login_state) { badge.className = 'badge off'; badge.textContent = '未登录'; }
   else if (a.last_query === '') { badge.className = 'badge run'; badge.textContent = '待查询'; }
   else if (a.last_ok) { badge.className = 'badge ok'; badge.textContent = '正常'; }
   else { badge.className = 'badge err'; badge.textContent = '查询失败'; }
@@ -228,8 +227,21 @@ function statusBadge(a) {
   return badge;
 }
 
-function renderRow(a) {
+function renderRow(a, idx, total) {
   const tr = document.createElement('tr');
+
+  // 排序（上移/下移）
+  const tdSort = document.createElement('td');
+  const sortOps = document.createElement('span');
+  sortOps.className = 'row-ops';
+  const upBtn = mkIconBtn('↑', '上移', () => moveAccount(a.phone, 'up'));
+  upBtn.disabled = idx === 0;
+  const downBtn = mkIconBtn('↓', '下移', () => moveAccount(a.phone, 'down'));
+  downBtn.disabled = idx === total - 1;
+  sortOps.appendChild(upBtn);
+  sortOps.appendChild(downBtn);
+  tdSort.appendChild(sortOps);
+  tr.appendChild(tdSort);
 
   // 备注
   const tdRemark = document.createElement('td');
@@ -307,6 +319,15 @@ function mkBtn(text, fn, cls) {
   return b;
 }
 
+function mkIconBtn(text, title, fn) {
+  const b = document.createElement('button');
+  b.className = 'icon-btn';
+  b.textContent = text;
+  b.title = title;
+  b.onclick = fn;
+  return b;
+}
+
 function usageTd(u) {
   const td = document.createElement('td');
   if (!u || (!u.used && !u.total)) { td.textContent = '—'; td.className = 'muted'; return td; }
@@ -329,6 +350,7 @@ function showError(msg) {
 }
 
 // ---------- 查询 ----------
+let queryingPhone = ''; // 当前正在查询的号码（轮询时从 /api/query/status 获取）
 async function queryAll() {
   const j = await api('/api/query/all', { method: 'POST' });
   if (!j.ok) { showError(j.error); return; }
@@ -347,10 +369,12 @@ function startPolling() {
   if (pollingTimer) return;
   pollingTimer = setInterval(async () => {
     const j = await api('/api/query/status');
+    queryingPhone = (j.running && j.current_phone) ? j.current_phone : '';
     await loadAccounts();
     if (j.ok && !j.running) {
       clearInterval(pollingTimer);
       pollingTimer = null;
+      queryingPhone = '';
       banner.style.display = 'none';
       document.getElementById('queryAllBtn').disabled = false;
     }
@@ -366,7 +390,7 @@ const carrierMap = {};
 // 静态兜底（接口未返回时按此渲染表单）
 const CARRIER_FALLBACK = {
   mobile: { name: '中国移动', needs_password: false, needs_sms_code: true },
-  unicom: { name: '中国联通', needs_password: false, needs_sms_code: true },
+  unicom: { name: '中国联通', needs_password: false, needs_sms_code: false },
   telecom: { name: '中国电信', needs_password: true, needs_sms_code: false },
   cbn: { name: '中国广电', needs_password: false, needs_sms_code: true },
 };
@@ -400,16 +424,13 @@ function updateStep1Form() {
   const info = carrierInfo(flowCarrier);
   document.getElementById('carrierChip').textContent = info.name + '（点击更换）';
   document.getElementById('passwordField').style.display = info.needs_password ? 'block' : 'none';
-  document.getElementById('unicomOpenIDField').style.display = flowCarrier === 'unicom' ? 'block' : 'none';
   const btn = document.getElementById('sendBtn');
-  if (flowCarrier === 'unicom') {
-    // 联通走微信小程序 OpenID 通道，不走网关滑块/短信
-    btn.style.display = 'none';
-    document.getElementById('step1Hint').textContent = '联通账号请通过上方「微信 OpenID 登录」添加（参考提示里的抓包步骤）';
-    return;
-  }
   btn.style.display = '';
-  if (info.needs_password) {
+  if (flowCarrier === 'unicom') {
+    // 联通网页登录：弹出真浏览器窗口，用户在窗口内完成登录
+    btn.textContent = '打开登录窗口';
+    document.getElementById('step1Hint').textContent = '点击「打开登录窗口」后，将弹出浏览器窗口打开联通网厅；服务密码登录或短信验证码登录均可（滑块与短信均在窗口内完成），登录成功后窗口自动关闭';
+  } else if (info.needs_password) {
     btn.textContent = '立即登录';
     document.getElementById('step1Hint').textContent = '点击「立即登录」后，系统将使用服务密码登录中国电信；首次登录需短信验证绑定设备';
   } else if (flowCarrier === 'cbn') {
@@ -420,34 +441,6 @@ function updateStep1Form() {
     document.getElementById('step1Hint').textContent = '点击「发送验证码」后，系统将打开登录页并自动填写手机号';
   }
 }
-
-// 联通微信小程序通道直接登录（推荐，自托管）
-async function submitUnicomOpenID() {
-  const phone = document.getElementById('addPhone').value.trim();
-  const openid = document.getElementById('unicomOpenID').value.trim();
-  if (!/^1\d{10}$/.test(phone)) { alert('请输入正确的手机号'); return; }
-  if (openid.length < 20) { alert('请粘贴有效的 openid（o 开头 28 位）'); return; }
-  const btn = document.getElementById('unicomOpenIDBtn');
-  btn.disabled = true;
-  btn.textContent = '正在验证 openid...';
-  try {
-    const j = await api('/api/accounts/unicom-openid', { method: 'POST', body: {
-      phone, openid, remark: document.getElementById('addRemark').value.trim()
-    } });
-    if (j.ok) {
-      closeAddModal();
-      loadAccounts();
-    } else {
-      alert(j.error || '登录失败');
-    }
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '使用该 OpenID 登录';
-  }
-}
-
-// 联通 ecs_token 登录入口已移除：网关滑块票据被拒（含 hosts 伪装域名方案），
-// 联通添加统一走上方微信小程序 OpenID 通道（/api/accounts/unicom-openid）。
 
 function gotoStep1() {
   const info = carrierInfo(flowCarrier);
@@ -472,15 +465,10 @@ function openAddModal(phone, carrier) {
   document.getElementById('addRemark').value = '';
   document.getElementById('addCode').value = '';
   document.getElementById('addPassword').value = '';
-  document.getElementById('unicomOpenID').value = '';
-  document.getElementById('unicomOpenIDBtn').disabled = false;
-  document.getElementById('unicomOpenIDBtn').textContent = '使用该 OpenID 登录';
-  document.getElementById('captchaRetryWrap').hidden = true;
   document.getElementById('telecomCaptchaWrap').hidden = true;
   document.getElementById('telecomCaptcha').value = '';
   document.getElementById('telecomCaptchaBtn').disabled = false;
   document.getElementById('telecomCaptchaImg').removeAttribute('src');
-  captchaAutoShown = false;
   document.getElementById('sendBtn').disabled = false;
   document.getElementById('submitCodeBtn').disabled = false;
   document.getElementById('submitCodeBtn').style.display = '';
@@ -500,44 +488,7 @@ function closeAddModal() {
   if (flowTimer) { clearInterval(flowTimer); flowTimer = null; }
 }
 
-// ---------- 联通滑块（腾讯 TJCaptcha，appid 与后端 unicom.CaptchaAppID 一致） ----------
-const CAPTCHA_APP_ID = '195809716';
-let captchaScriptLoading = null;
-let captchaAutoShown = false; // 每个登录会话只自动弹一次，避免循环弹窗
-
-function loadCaptchaScript() {
-  if (window.TencentCaptcha) return Promise.resolve();
-  if (captchaScriptLoading) return captchaScriptLoading;
-  captchaScriptLoading = new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://turing.captcha.qcloud.com/TJCaptcha.js';
-    s.onload = () => resolve();
-    s.onerror = () => { captchaScriptLoading = null; reject(new Error('load failed')); };
-    document.head.appendChild(s);
-  });
-  return captchaScriptLoading;
-}
-
-async function showUnicomCaptcha() {
-  try {
-    await loadCaptchaScript();
-  } catch (e) {
-    showError('滑块组件加载失败，请检查网络后点击按钮重试');
-    return;
-  }
-  const captcha = new TencentCaptcha(CAPTCHA_APP_ID, async (res) => {
-    if (res.ret !== 0 || !res.ticket || !res.randstr) return; // 用户关闭滑块，可点重试按钮再开
-    document.getElementById('captchaRetryWrap').hidden = true;
-    document.getElementById('flowStatus').textContent = '滑块验证完成，正在发送短信验证码...';
-    const j = await api('/api/login-flow/captcha', { method: 'POST', body: { ticket: res.ticket, randstr: res.randstr } });
-    if (!j.ok) {
-      showError(j.error);
-      document.getElementById('captchaRetryWrap').hidden = false;
-    }
-  });
-  captcha.show();
-}
-
+// ---------- 登录流程 ----------
 async function startLoginFlow() {
   const phone = document.getElementById('addPhone').value.trim();
   const remark = document.getElementById('addRemark').value.trim();
@@ -547,23 +498,21 @@ async function startLoginFlow() {
   if (info.needs_password && !password) { alert('请输入服务密码'); return; }
   const btn = document.getElementById('sendBtn');
   btn.disabled = true;
-  btn.textContent = info.needs_password ? '登录中...' : '发送中...';
+  btn.textContent = flowCarrier === 'unicom' ? '正在打开...' : (info.needs_password ? '登录中...' : '发送中...');
   const j = await api('/api/login-flow/start', { method: 'POST', body: { phone, remark, carrier: flowCarrier, password } });
   btn.disabled = false;
-  btn.textContent = info.needs_password ? '立即登录' : '发送验证码';
+  btn.textContent = flowCarrier === 'unicom' ? '打开登录窗口'
+    : (info.needs_password ? '立即登录' : '发送验证码');
   if (!j.ok) { showError(j.error); return; }
   flowPhone = phone;
-  captchaAutoShown = false;
-  document.getElementById('captchaRetryWrap').hidden = true;
   document.getElementById('addStep1').style.display = 'none';
   document.getElementById('addStep2').style.display = 'block';
-  // 验证码型：显示验证码输入；密码型：仅显示进度
+  // 验证码型：显示验证码输入；密码型/网页登录型：仅显示进度
   document.getElementById('codeField').style.display = info.needs_sms_code ? 'block' : 'none';
   document.getElementById('submitCodeBtn').style.display = info.needs_sms_code ? '' : 'none';
   document.getElementById('flowStatus').textContent = info.needs_sms_code
-    ? (flowCarrier === 'unicom' ? '正在发送短信验证码...'
-      : flowCarrier === 'cbn' ? '正在连接中国广电网上营业厅...' : '正在启动浏览器...')
-    : '正在通过服务密码登录' + info.name + '...';
+    ? (flowCarrier === 'cbn' ? '正在连接中国广电网上营业厅...' : '正在启动浏览器...')
+    : (flowCarrier === 'unicom' ? '正在打开联通网厅登录窗口，请在窗口内完成登录...' : '正在通过服务密码登录' + info.name + '...');
   document.getElementById('addCode').value = '';
   pollFlow();
 }
@@ -583,13 +532,6 @@ function pollFlow() {
     el.textContent = j.stage_text + (j.msg && j.msg !== j.stage_text ? '：' + j.msg : '');
     const done = j.stage === 'success' || j.stage === 'error' || j.stage === 'closed';
     document.getElementById('submitCodeBtn').disabled = done || j.stage === 'submitting';
-    // 联通滑块：need_captcha 阶段显示重试按钮并自动弹出一次（校验失败回到该阶段时不再自动弹）
-    const needCaptcha = j.stage === 'need_captcha';
-    document.getElementById('captchaRetryWrap').hidden = !needCaptcha;
-    if (needCaptcha && j.carrier === 'unicom' && !captchaAutoShown) {
-      captchaAutoShown = true;
-      showUnicomCaptcha();
-    }
     // 电信设备注册：need_image_captcha 阶段展示图片验证码
     const needImageCaptcha = j.stage === 'need_image_captcha';
     document.getElementById('telecomCaptchaWrap').hidden = !needImageCaptcha;
@@ -613,7 +555,6 @@ function pollFlow() {
 function flowDone() {
   const el = document.getElementById('flowStatus');
   el.textContent = '✓ 登录成功，登录态已保存，即将自动查询...';
-  document.getElementById('captchaRetryWrap').hidden = true;
   document.getElementById('telecomCaptchaWrap').hidden = true;
   document.getElementById('flowCancelBtn').textContent = '关闭';
   const phone = flowPhone;
@@ -635,7 +576,6 @@ function flowEnded(j) {
     text = '登录会话已结束' + (reason ? '：' + reason : '，请重新发起登录');
   }
   el.textContent = text;
-  document.getElementById('captchaRetryWrap').hidden = true;
   document.getElementById('telecomCaptchaWrap').hidden = true;
   if (j.stage === 'closed' && j.submitted) {
     // 验证码已提交，Cookie 通常已保存：查询一次即可确认登录是否成功
@@ -705,8 +645,6 @@ async function resumeLoginFlow() {
   document.getElementById('addStep2').style.display = 'block';
   const needCode = (info && info.needs_sms_code) || j.stage === 'waiting_code';
   flowCarrier = j.carrier;
-  captchaAutoShown = false;
-  document.getElementById('captchaRetryWrap').hidden = j.stage !== 'need_captcha';
   // 电信设备注册：图片验证码图片由后续轮询补充
   document.getElementById('telecomCaptchaWrap').hidden = j.stage !== 'need_image_captcha';
   document.getElementById('codeField').style.display = needCode ? 'block' : 'none';

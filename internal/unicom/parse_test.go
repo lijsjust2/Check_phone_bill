@@ -9,58 +9,31 @@ import (
 	"chinamobile-monitor/internal/store"
 )
 
-// 依据开源脚本（10010v4）解析逻辑构造的余量响应样例
-// （流量原始单位 KB；语音分钟；短信条数）
+// 真实账号（联通王卡）2026-09-10 queryOcsPackageFlowLeftContentRevisedInJune 响应
+// （关键字段截取；流量原始单位 MB：flowtype 1=通用 2=专属 3=其他/免流）
 const sampleFlowLeft = `{
   "code": "0000",
-  "time": "2024.01.01 12:00:00",
-  "packageName": "5G畅爽冰激凌套餐-99元",
-  "summary": {"sum": "7366923.0", "freeFlow": "0"},
+  "packageName": "联通王卡（新）",
+  "allUserFlow": "3130.70",
+  "canUseFlowAll": "19.27",
+  "canuseFlowAllUnit": "GB",
+  "flowSumList": [
+    {"elemtype": "3", "flowtype": "1", "xcanusevalue": "19732.89", "xusedvalue": "747.11"},
+    {"elemtype": "3", "flowtype": "2", "xcanusevalue": "28336.39", "xusedvalue": "2383.61"},
+    {"elemtype": "3", "flowtype": "3", "xcanusevalue": "0.00", "xusedvalue": "0.12"}
+  ],
+  "voiceHeadUsed": 16,
+  "voiceSumresource": 0,
+  "canuseVoiceAllUnit": "分钟",
+  "smsHeadUsed": 0,
+  "smsSumresource": 0,
   "resources": [
-    {
-      "type": "flow",
-      "details": [
-        {"feePolicyName": "套餐内流量", "total": "29360128", "remain": "22093205", "use": "7266923", "limited": "0"}
-      ]
-    },
-    {
-      "type": "voice",
-      "details": [
-        {"feePolicyName": "套餐内通话", "total": "2250", "remain": "2211", "use": "39", "limited": "0"}
-      ]
-    }
-  ],
-  "unshared": [
-    {
-      "type": "unsharedFlowList",
-      "details": [
-        {"feePolicyName": "非共享流量", "addupItemCode": "40008", "total": "1048576", "remain": "1000000", "use": "10000", "limited": "0"}
-      ]
-    }
-  ],
-  "rzbresources": [
-    {
-      "type": "rzb",
-      "details": [
-        {"feePolicyName": "日租宝", "total": "0", "remain": "0", "use": "100000", "limited": "1"}
-      ]
-    }
-  ],
-  "mlresources": [
-    {
-      "type": "ml",
-      "details": [
-        {"feePolicyName": "免流流量（定向）", "total": "3145728", "remain": "3145728", "use": "0", "limited": "0"}
-      ]
-    }
-  ],
-  "smslist": [
-    {
-      "type": "smslist",
-      "details": [
-        {"feePolicyName": "套餐内短信", "total": "100", "remain": "95", "use": "5", "limited": "0"}
-      ]
-    }
+    {"details": [
+      {"feePolicyName": "30GB联通王卡(新)专属流量包", "flowType": "2", "total": "30720.00", "remain": "28336.39", "use": "2383.60"},
+      {"feePolicyName": "广东联通王卡专属10元资源包（20GB通用流量）", "flowType": "1", "total": "20480.00", "remain": "19732.89", "use": "747.10"}
+    ], "type": "flow", "userResource": "3130.7002"},
+    {"details": [], "type": "Voice", "userResource": "0"},
+    {"details": [], "type": "smsList", "userResource": "0"}
   ]
 }`
 
@@ -70,44 +43,40 @@ func TestParseFlowLeft(t *testing.T) {
 	if r.Carrier != carrier.Unicom {
 		t.Errorf("carrier = %q", r.Carrier)
 	}
-	if r.PlanName != "5G畅爽冰激凌套餐-99元" {
+	if r.PlanName != "联通王卡（新）" {
 		t.Errorf("planName = %q", r.PlanName)
 	}
-	// 通用流量 = resources(7266923/29360128) + unshared(10000/1048576)
-	// 已用 7276923KB = 6.94GB；总量 30408704KB = 29.00GB
-	if r.GeneralFlow.Used != "6.94GB" {
+	// 通用流量：flowtype=1 已用 747.11MB≈0.73GB / 总 (747.11+19732.89)=20480MB=20GB
+	if r.GeneralFlow.Used != "0.73GB" {
 		t.Errorf("generalFlow used = %q", r.GeneralFlow.Used)
 	}
-	if r.GeneralFlow.TotalNum < 28.99 || r.GeneralFlow.TotalNum > 29.01 {
-		t.Errorf("generalFlow totalNum = %v", r.GeneralFlow.TotalNum)
+	if r.GeneralFlow.Total != "20GB" {
+		t.Errorf("generalFlow total = %q", r.GeneralFlow.Total)
 	}
-	// 区域流量（日租宝）：不限量 + 已用 100000KB
-	if r.RegionalFlow.Total != "不限量" || !r.RegionalFlow.Unlimited {
-		t.Errorf("regionalFlow total = %q unlimited=%v", r.RegionalFlow.Total, r.RegionalFlow.Unlimited)
+	// 定向流量：flowtype=2 已用 2383.61MB≈2.33GB / 总 30720MB=30GB
+	if r.SpecialFlow.Used != "2.33GB" {
+		t.Errorf("specialFlow used = %q", r.SpecialFlow.Used)
 	}
-	if r.RegionalFlow.UsedNum < 0.095 || r.RegionalFlow.UsedNum > 0.096 {
-		t.Errorf("regionalFlow usedNum = %v", r.RegionalFlow.UsedNum)
+	if r.SpecialFlow.Total != "30GB" {
+		t.Errorf("specialFlow total = %q", r.SpecialFlow.Total)
 	}
-	// 定向流量（免流）：3145728KB = 3GB
-	if r.SpecialFlow.Total != "3GB" || r.SpecialFlow.Used != "0GB" {
-		t.Errorf("specialFlow = %q / %q", r.SpecialFlow.Used, r.SpecialFlow.Total)
-	}
-	// 总流量：summary.sum 7366923KB = 7.03GB；总量 = 通用+区域 = 30408704KB
-	if r.TotalFlow.Used != "7.03GB" {
+	// 总流量：已用 allUserFlow 3130.70MB≈3.06GB / 总 (20480+30720)MB=50GB
+	if r.TotalFlow.Used != "3.06GB" {
 		t.Errorf("totalFlow used = %q", r.TotalFlow.Used)
 	}
-	if r.TotalFlow.TotalNum < 28.99 || r.TotalFlow.TotalNum > 29.01 {
-		t.Errorf("totalFlow totalNum = %v", r.TotalFlow.TotalNum)
+	if r.TotalFlow.Total != "50GB" {
+		t.Errorf("totalFlow total = %q", r.TotalFlow.Total)
 	}
-	// 语音 / 短信
-	if r.Voice.Used != "39分钟" || r.Voice.Total != "2250分钟" || r.VoiceRemaining != "2211分钟" {
-		t.Errorf("voice = %q / %q / %q", r.Voice.Used, r.Voice.Total, r.VoiceRemaining)
+	// 王卡无套内语音：voiceHeadUsed=16 分钟套外已用，voiceSumresource=0
+	if r.Voice.Used != "16分钟" || r.Voice.Total != "0分钟" {
+		t.Errorf("voice = %q / %q", r.Voice.Used, r.Voice.Total)
 	}
-	if r.Sms.Used != "5条" || r.Sms.Total != "100条" || r.SmsRemaining != "95条" {
-		t.Errorf("sms = %q / %q / %q", r.Sms.Used, r.Sms.Total, r.SmsRemaining)
+	// 短信 0/0：不落字段
+	if r.Sms != (store.UsageItem{}) {
+		t.Errorf("sms = %+v", r.Sms)
 	}
-	// 已用百分比 ≈ 7.03/29.00 ≈ 24.25%
-	if r.FlowUsedPercent < 24.2 || r.FlowUsedPercent > 24.3 {
+	// 已用百分比 3.06/50 ≈ 6.1%
+	if r.FlowUsedPercent < 6.0 || r.FlowUsedPercent > 6.2 {
 		t.Errorf("flowPercent = %v", r.FlowUsedPercent)
 	}
 }
@@ -161,28 +130,21 @@ func TestParseBalance(t *testing.T) {
 	}
 }
 
-func TestSetCookieToCookie(t *testing.T) {
-	sc := "e3d5632b6e5a4f8d=ABC; Domain=.10010.com; Path=/, another=XYZ; Path=/"
-	got := setCookieToCookie(sc)
-	if got != "e3d5632b6e5a4f8d=ABC; another=XYZ" {
-		t.Errorf("setCookieToCookie = %q", got)
-	}
-}
-
-func TestFmtGB(t *testing.T) {
+func TestFmtMB(t *testing.T) {
 	cases := []struct {
-		kb   float64
+		mb   float64
 		want string
 	}{
-		{0, "0GB"},
-		{1048576, "1GB"},
-		{7366923, "7.03GB"},
-		{512 * 1024, "0.5GB"},
+		{0, "0MB"},
+		{1024, "1GB"},
+		{747.11, "0.73GB"},
+		{20480, "20GB"},
+		{3130.70, "3.06GB"},
+		{0.12, "0.12MB"},
 	}
 	for _, c := range cases {
-		if got := fmtGB(c.kb); got != c.want {
-			t.Errorf("fmtGB(%v) = %q, want %q", c.kb, got, c.want)
+		if got := fmtMB(c.mb); got != c.want {
+			t.Errorf("fmtMB(%v) = %q, want %q", c.mb, got, c.want)
 		}
 	}
 }
-

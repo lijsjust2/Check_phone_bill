@@ -10,10 +10,11 @@ import (
 	"strings"
 	"time"
 
-	_ "chinamobile-monitor/internal/cbn"    // 注册中国广电 Provider
+	"chinamobile-monitor/internal/browserx"
 	"chinamobile-monitor/internal/carrier"
+	_ "chinamobile-monitor/internal/cbn" // 注册中国广电 Provider
 	"chinamobile-monitor/internal/loggerx"
-	"chinamobile-monitor/internal/mobile"
+	_ "chinamobile-monitor/internal/mobile" // 注册中国移动 Provider
 	"chinamobile-monitor/internal/push"
 	"chinamobile-monitor/internal/runner"
 	"chinamobile-monitor/internal/scheduler"
@@ -35,6 +36,7 @@ func main() {
 	dataDir := flag.String("data", envOr("DATA_DIR", "./data/chinamobile"), "数据目录（账号登录态/配置/日志）")
 	port := flag.Int("port", portDefault, "Web 面板端口")
 	loginCmd := flag.String("login", "", "本地登录指定手机号（弹出浏览器窗口）")
+	carrierCmd := flag.String("carrier", "", "配合 -login 指定运营商：mobile|unicom|telecom|cbn（新号码必填，否则按移动处理）")
 	queryCmd := flag.String("query", "", "命令行查询（可传 * 查询全部账号）")
 	saveJSON := flag.Bool("json", false, "查询时保存原始响应 JSON")
 	flag.Parse()
@@ -46,7 +48,7 @@ func main() {
 
 	log := loggerx.New(*dataDir)
 	// 清理上次异常退出残留的浏览器进程（会锁住登录态目录）
-	mobile.KillStaleBrowsers(*dataDir)
+	browserx.KillStaleBrowsers(*dataDir)
 	st, err := store.LoadStore(*dataDir)
 	if err != nil {
 		fmt.Println("加载配置失败:", err)
@@ -56,7 +58,7 @@ func main() {
 
 	switch {
 	case *loginCmd != "":
-		cliLogin(*dataDir, *loginCmd, log, st)
+		cliLogin(*dataDir, *loginCmd, strings.TrimSpace(*carrierCmd), log, st)
 	case *queryCmd != "":
 		cliQuery(*dataDir, *queryCmd, *saveJSON, log, st, r)
 	default:
@@ -70,17 +72,27 @@ func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *ru
 		fmt.Printf("数据目录: %s\n", abs)
 	}
 
-	// 首次启动时把已有账号的登录态标志同步一次（浏览器型看目录；电信看 token；联通看 Cookie）
+	// 首次启动时把已有账号的登录态标志同步一次
+	// （移动/广电浏览器型看 user-data 目录；电信看 token；联通看 JUT）
 	for _, a := range st.ListAccounts() {
 		_, dirErr := os.Stat(store.UserDataDir(dataDir, a.Phone))
-		if dirErr == nil && a.CarrierCode() == carrier.Mobile {
-			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
-		} else if a.CarrierCode() == carrier.Telecom && a.Token != "" {
-			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
-		} else if a.CarrierCode() == carrier.Unicom && a.Cookie != "" {
-			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
-		} else if a.CarrierCode() == carrier.Cbn && a.Cookie != "" {
-			st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
+		switch a.CarrierCode() {
+		case carrier.Mobile:
+			if dirErr == nil {
+				st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
+			}
+		case carrier.Telecom:
+			if a.Token != "" {
+				st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
+			}
+		case carrier.Unicom:
+			if a.WebToken != "" {
+				st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
+			}
+		case carrier.Cbn:
+			if a.Cookie != "" {
+				st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
+			}
 		}
 	}
 
@@ -94,50 +106,96 @@ func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *ru
 	}
 }
 
-// cliLogin 本地有头浏览器登录（与 Python 版 --login 行为一致）
-func cliLogin(dataDir, phone string, log *loggerx.Logger, st *store.Store) {
+// cliLogin 本地有头浏览器登录（与 Python 版 --login 行为一致，按账号运营商分发）
+func cliLogin(dataDir, phone, carrierFlag string, log *loggerx.Logger, st *store.Store) {
 	if !store.ValidPhone(phone) {
 		fmt.Println("手机号格式不正确")
 		os.Exit(1)
 	}
-	fmt.Println(strings.Repeat("=", 50))
-	fmt.Printf("中国移动登录 → %s\n", phone)
-	fmt.Println(strings.Repeat("=", 50))
+	// 运营商优先级：命令行 -carrier > 已存账号 > 默认移动
+	code := carrierFlag
+	if code == "" {
+		if acc := st.GetAccount(phone); acc != nil {
+			code = acc.CarrierCode()
+		} else {
+			code = carrier.Mobile
+		}
+	}
+	if _, err := st.UpsertAccount(phone, code, ""); err != nil {
+		fmt.Println("创建账号失败:", err)
+		os.Exit(1)
+	}
+	p := carrier.Get(code)
 
-	flow, err := mobile.StartLogin(phone, dataDir, false, log)
+	fmt.Println(strings.Repeat("=", 50))
+	fmt.Printf("%s登录 → %s\n", p.Name(), phone)
+	fmt.Println(strings.Repeat("=", 50))
+	if code == carrier.Unicom {
+		fmt.Println("将弹出浏览器窗口打开联通网厅，请在窗口中完成登录（滑块/短信均在窗口内）。")
+	}
+
+	flow, err := p.StartLogin(carrier.LoginParams{Phone: phone, DataDir: dataDir, Headless: false, Log: log})
 	if err != nil {
 		fmt.Println("启动登录失败:", err)
 		os.Exit(1)
 	}
 
-	// 终端输入验证码（也可直接在浏览器中操作，脚本会自动监测）
-	go func() {
-		reader := bufio.NewReader(os.Stdin)
-		for {
-			fmt.Print("\n请输入验证码后按回车（直接回车跳过）: ")
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				return
+	// 终端输入验证码（验证码型运营商；也可直接在浏览器中操作，脚本会自动监测）
+	if p.NeedsSMSCode() {
+		go func() {
+			reader := bufio.NewReader(os.Stdin)
+			for {
+				fmt.Print("\n请输入验证码后按回车（直接回车跳过）: ")
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					return
+				}
+				code := strings.TrimSpace(line)
+				if code == "" {
+					continue
+				}
+				_ = flow.SubmitCode(code)
 			}
-			code := strings.TrimSpace(line)
-			if code == "" {
-				continue
-			}
-			_ = flow.SubmitCode(code)
-		}
-	}()
+		}()
+	}
 
 	<-flow.Done()
 	stage, msg := flow.Status()
 	fmt.Println()
 	switch stage {
-	case mobile.StageSuccess:
+	case carrier.StageSuccess:
 		fmt.Println("登录成功！")
-		fmt.Printf("登录态已保存到: %s\n", store.UserDataDir(dataDir, phone))
+		if code == carrier.Unicom {
+			fmt.Println("JUT 登录态已写入账号配置，之后查询不再需要浏览器。")
+		} else {
+			fmt.Printf("登录态已保存到: %s\n", store.UserDataDir(dataDir, phone))
+		}
 		fmt.Println("下次查询时自动复用该状态。")
-		st.UpdateAccount(phone, func(a *store.Account) { a.HasLoginState = true })
+		st.UpdateAccount(phone, func(a *store.Account) {
+			a.HasLoginState = true
+			if saver, ok := flow.(carrier.LoginStateSaver); ok {
+				saver.SaveLogin(a)
+			}
+		})
+
+		// 立刻查询一次，确认登录态真能用（避免"登录成功但查不动"）
+		fmt.Println()
+		fmt.Println("正在验证登录态（查询一次）...")
+		pr := queryOne(dataDir, phone, false, log, st)
+		if pr.Err != "" {
+			fmt.Printf("  [验证失败] %s\n", pr.Err)
+		} else {
+			fields := store.DefaultFields()
+			if a := st.GetAccount(phone); a != nil {
+				fields = a.EffectiveFields(st.GetSettings().Push.Fields)
+			}
+			for _, line := range carrier.FormatResultLines(phone, pr.Result, fields) {
+				fmt.Println(line)
+			}
+			fmt.Println("  ✓ 登录态可用")
+		}
 	default:
-		fmt.Printf("登录结束: %s %s\n", mobile.StageText(stage), msg)
+		fmt.Printf("登录结束: %s %s\n", carrier.StageText(stage), msg)
 	}
 }
 

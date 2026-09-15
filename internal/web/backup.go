@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"chinamobile-monitor/internal/mobile"
+	"chinamobile-monitor/internal/browserx"
 	"chinamobile-monitor/internal/store"
 )
 
@@ -150,7 +150,7 @@ func (s *Server) apiBackupImport(w http.ResponseWriter, r *http.Request) {
 	// 停掉进行中的登录流程（释放浏览器 profile 文件锁）
 	s.cancelActiveFlow()
 	// 清理所有残留浏览器进程（异常退出留下的，锁住 user-data 目录）
-	mobile.KillStaleBrowsers(s.dataDir())
+	browserx.KillStaleBrowsers(s.dataDir())
 
 	dir := s.dataDir()
 

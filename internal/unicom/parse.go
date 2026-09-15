@@ -11,108 +11,84 @@ import (
 	"chinamobile-monitor/internal/store"
 )
 
-// 资源组 → 展示类别（与开源脚本 resourcesConfig 对齐）
-//
-//	resources 套餐内流量&流量包 → 通用流量
-//	unshared  套餐内流量&流量包(非共享) → 通用流量
-//	rzbresources 日租宝 → 区域流量
-//	mlresources 免流流量 → 定向流量
-//	twresources 套外流量 → 不计入套餐余量
-var (
-	generalFlowKeys = []string{"resources", "unshared"}
-	regionalFlowKey = "rzbresources"
-	specialFlowKey  = "mlresources"
-)
+// 网页通道 queryOcsPackageFlowLeftContentRevisedInJune 响应解析。
+// 流量数值单位 MB；flowtype：1=通用（全国月包）2=专属（定向）3=其他（区域/免流/闲时等）。
 
-// 顶层跳过的非资源键
-var invalidResourceKeys = map[string]bool{"usepercent": true, "accountbar": true, "code": true, "time": true, "packageName": true, "summary": true}
-
-// ParseFlowLeft queryOcsPackageFlowLeft 响应 → store.QueryResult
-//
-//	流量原始单位 KB（与移动/电信统一换算 GB）；
-//	语音/短信从 type=voice/smslist 等资源项的 details 里尽力读取（分钟/条数）。
+// ParseFlowLeft 余量响应 → store.QueryResult
 func ParseFlowLeft(data gjson.Result) *store.QueryResult {
 	r := &store.QueryResult{Carrier: carrier.Unicom}
 	r.PlanName = data.Get("packageName").Str
 
-	// 各资源组用量聚合
-	var general, regional, special, voice, sms accUsage
-	for key, val := range data.Map() {
-		if invalidResourceKeys[key] || !val.IsArray() {
-			continue
-		}
-		for _, item := range val.Array() {
-			details := item.Get("details")
-			if !details.IsArray() {
-				continue
-			}
-			typ := item.Get("type").Str
-			switch typ {
-			case "voice", "unsharedvoicelist":
-				voice.add(details)
-			case "smslist", "unsharedsmslist":
-				sms.add(details)
-			default:
-				// 流量类：按顶层键分类
-				switch key {
-				case regionalFlowKey:
-					regional.add(details)
-				case specialFlowKey:
-					special.add(details)
-				default:
-					if containsStr(generalFlowKeys, key) {
-						general.add(details)
-					}
-				}
-			}
-		}
+	g, s, o := sumFlowUsage(data)
+
+	if g.nonEmpty() {
+		r.GeneralFlow = mbItem(g.used, g.total)
+	}
+	if s.nonEmpty() {
+		r.SpecialFlow = mbItem(s.used, s.total)
+	}
+	if o.nonEmpty() {
+		r.RegionalFlow = mbItem(o.used, o.total)
 	}
 
-	if general.total > 0 || general.used > 0 {
-		r.GeneralFlow = kbItem(general.used, general.total, general.unlimited)
-	}
-	if regional.total > 0 || regional.used > 0 {
-		r.RegionalFlow = kbItem(regional.used, regional.total, regional.unlimited)
-	}
-	if special.total > 0 || special.used > 0 {
-		r.SpecialFlow = kbItem(special.used, special.total, special.unlimited)
-	}
-
-	// 总流量：summary.sum 为已用；总量取通用+区域合计（定向流量单独展示）
-	totalUsed := max0(data.Get("summary.sum").Float())
-	totalAll := general.total + regional.total
-	if totalAll <= 0 {
-		totalAll = general.used + regional.used
+	// 总流量：已用取 allUserFlow（兜底 summary.sum / 分类合计）；总量 = 三类合计
+	totalUsed := data.Get("allUserFlow").Float()
+	if totalUsed <= 0 {
+		totalUsed = data.Get("summary.sum").Float()
 	}
 	if totalUsed <= 0 {
-		totalUsed = general.used + regional.used + special.used
+		totalUsed = g.used + s.used + o.used
 	}
+	totalAll := g.total + s.total + o.total
 	if totalUsed > 0 || totalAll > 0 {
-		r.TotalFlow = kbItem(totalUsed, totalAll, false)
+		r.TotalFlow = mbItem(totalUsed, totalAll)
 	}
 
-	if voice.total > 0 || voice.used > 0 {
+	// 语音：voiceHeadUsed 已用（套外也计入）；voiceSumresource 套内总量（0 = 全套外无免费语音）
+	vUsed := data.Get("voiceHeadUsed").Float()
+	if vUsed <= 0 {
+		vUsed = sumResourceUsed(data.Get("TwResources"))
+	}
+	vTotal := data.Get("voiceSumresource").Float()
+	if vUsed > 0 || vTotal > 0 {
 		r.Voice = store.UsageItem{
-			Used:     fmtMin(voice.used),
-			Total:    fmtMin(voice.total),
-			UsedNum:  voice.used,
-			TotalNum: voice.total,
+			Used:     fmtMin(vUsed),
+			Total:    fmtMin(vTotal),
+			UsedNum:  vUsed,
+			TotalNum: vTotal,
 			Unit:     "01",
 		}
-		if remain := voice.total - voice.used; remain > 0 {
+		// 套外语音套餐（vTotal=0、vUsed>0）剩余按 0 分钟计，避免出现空值
+		if remain := data.Get("canuseVoiceAll").Float(); remain > 0 {
 			r.VoiceRemaining = fmtMin(remain)
+		} else {
+			left := vTotal - vUsed
+			if left < 0 {
+				left = 0
+			}
+			r.VoiceRemaining = fmtMin(left)
 		}
 	}
-	if sms.total > 0 || sms.used > 0 {
+
+	// 短信
+	smsUsed := data.Get("smsHeadUsed").Float()
+	smsTotal := data.Get("smsSumresource").Float()
+	if smsUsed > 0 || smsTotal > 0 {
 		r.Sms = store.UsageItem{
-			Used:     fmtSms(sms.used),
-			Total:    fmtSms(sms.total),
-			UsedNum:  sms.used,
-			TotalNum: sms.total,
+			Used:     fmtSms(smsUsed),
+			Total:    fmtSms(smsTotal),
+			UsedNum:  smsUsed,
+			TotalNum: smsTotal,
 			Unit:     "02",
 		}
-		if remain := sms.total - sms.used; remain > 0 {
+		if remain := data.Get("canUseSmsAll").Float(); remain > 0 {
 			r.SmsRemaining = fmtSms(remain)
+		} else {
+			left := smsTotal - smsUsed
+			if left < 0 {
+				left = 0
+			}
+			r.SmsRemaining = fmtSms(left)
 		}
 	}
 
@@ -123,10 +99,13 @@ func ParseFlowLeft(data gjson.Result) *store.QueryResult {
 	return r
 }
 
-// ParseBalance accountBalancenew 响应 → 余额/实时话费（尽力读取，字段参考 ha_unicom_bill）：
+// ParseBalance accountBalancenew 响应 → 余额/话费（顶层字段，尽力读取）：
 //
-//	curntbalancecust 当前余额（元）
-//	totalrealfee / realfeecustnew 本月实时话费（元）
+//	curntbalancecust    当前可用余额（元）
+//	totalrealfee        本月实时话费（元，含定向支付；realfeecust 与其同值）
+//	realfeecustnew      实时话费（元，不含定向支付部分）
+//	allbillfee          本月账单总额（元）
+//	monthlyRechargeBill 本月存入/充值（元）
 func ParseBalance(r *store.QueryResult, data gjson.Result) {
 	d := data.Get("data")
 	if !d.Exists() {
@@ -141,7 +120,71 @@ func ParseBalance(r *store.QueryResult, data gjson.Result) {
 	} else if v, ok := parseFee(d.Get("realfeecustnew")); ok {
 		r.RealtimeFee = fmt.Sprintf("%.2f", v)
 	}
+	if v, ok := parseFee(d.Get("allbillfee")); ok {
+		r.BillTotal = fmt.Sprintf("%.2f", v) // 输出时由 format.go 统一补"元"
+	}
 }
+
+// ---------- 聚合 ----------
+
+// mbUsage 流量聚合（MB）
+type mbUsage struct {
+	used  float64
+	total float64
+}
+
+func (a *mbUsage) add(u mbUsage) {
+	a.used += u.used
+	a.total += u.total
+}
+
+func (a mbUsage) nonEmpty() bool { return a.used > 0 || a.total > 0 }
+
+// sumFlowUsage 流量分类聚合：优先 flowSumList（xusedvalue 已用 + xcanusevalue 剩余 = 总量），
+// 缺失时回退 resources[type=flow].details（use/total + flowType 字段）
+func sumFlowUsage(data gjson.Result) (g, s, o mbUsage) {
+	list := data.Get("flowSumList").Array()
+	if len(list) > 0 {
+		for _, it := range list {
+			used := it.Get("xusedvalue").Float()
+			total := used + it.Get("xcanusevalue").Float()
+			clsByType(it.Get("flowtype").Str, mbUsage{used: used, total: total}, &g, &s, &o)
+		}
+		return g, s, o
+	}
+	for _, res := range data.Get("resources").Array() {
+		if res.Get("type").Str != "flow" {
+			continue
+		}
+		for _, d := range res.Get("details").Array() {
+			u := mbUsage{used: d.Get("use").Float(), total: d.Get("total").Float()}
+			clsByType(d.Get("flowType").Str, u, &g, &s, &o)
+		}
+	}
+	return g, s, o
+}
+
+func clsByType(flowType string, u mbUsage, g, s, o *mbUsage) {
+	switch flowType {
+	case "1":
+		g.add(u)
+	case "2":
+		s.add(u)
+	case "3":
+		o.add(u)
+	}
+}
+
+// sumResourceUsed 资源组 userResource 合计（语音兜底：TwResources 各项 userResource 为已用）
+func sumResourceUsed(list gjson.Result) float64 {
+	var sum float64
+	for _, it := range list.Array() {
+		sum += it.Get("userResource").Float()
+	}
+	return sum
+}
+
+// ---------- 格式化 ----------
 
 // parseFee 接口余额字段 → 浮点（支持 "23.45"、"-1.20"、"0" 等，无效返回 false）
 func parseFee(v gjson.Result) (float64, bool) {
@@ -156,79 +199,31 @@ func parseFee(v gjson.Result) (float64, bool) {
 	return f, true
 }
 
-// accUsage 明细聚合器（use/total 原始值，主副卡取当前卡已用）
-type accUsage struct {
-	used      float64
-	total     float64
-	unlimited bool // 任一明细不限量则整组视为不限量
+const mbPerGB = 1024
+
+// mbItem MB 用量 → UsageItem（GB 数值 + 可读字符串）
+func mbItem(used, totalMB float64) store.UsageItem {
+	return store.UsageItem{
+		Used:     fmtMB(used),
+		Total:    fmtMB(totalMB),
+		UsedNum:  used / mbPerGB,
+		TotalNum: totalMB / mbPerGB,
+		Unit:     "04",
+	}
 }
 
-func (a *accUsage) add(details gjson.Result) {
-	for _, d := range details.Array() {
-		used := d.Get("use").Float()
-		// 主副卡：viceCardlist 中 currentLoginFlag=1 的当前卡已用优先
-		for _, v := range d.Get("viceCardlist").Array() {
-			if v.Get("currentLoginFlag").Str == "1" {
-				if cu := v.Get("use").Float(); cu > 0 {
-					used = cu
-				}
-				break
-			}
+// fmtMB MB → 可读字符串（≥0.01GB 按 GB 展示且整数省小数，小值按 MB）
+func fmtMB(mb float64) string {
+	if gb := mb / mbPerGB; gb >= 0.01 {
+		if gb == float64(int64(gb)) {
+			return fmt.Sprintf("%dGB", int64(gb))
 		}
-		if used <= 0 {
-			used = d.Get("xexceedvalue").Float()
-		}
-		a.used += max0(used)
-		a.total += max0(d.Get("total").Float())
-		if d.Get("limited").Str == "1" {
-			a.unlimited = true
-		}
+		return trimZero(gb) + "GB"
 	}
-}
-
-func max0(v float64) float64 {
-	if v < 0 {
-		return 0
+	if mb == float64(int64(mb)) {
+		return fmt.Sprintf("%dMB", int64(mb))
 	}
-	return v
-}
-
-func containsStr(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
-const kbPerGB = 1024 * 1024
-
-// kbItem KB 用量 → UsageItem（换算 GB；不限量套餐 Total 显示"不限量"）
-func kbItem(used, total float64, unlimited bool) store.UsageItem {
-	item := store.UsageItem{
-		Used:    fmtGB(used),
-		Unit:    "04",
-		UsedNum: used / kbPerGB,
-	}
-	if unlimited {
-		item.Total = "不限量"
-		item.TotalNum = 0
-		item.Unlimited = true
-	} else {
-		item.Total = fmtGB(total)
-		item.TotalNum = total / kbPerGB
-	}
-	return item
-}
-
-// fmtGB KB → "x.xGB"（整数值省略小数，与移动/电信展示风格一致）
-func fmtGB(kb float64) string {
-	gb := kb / kbPerGB
-	if gb == float64(int64(gb)) {
-		return strconv.FormatInt(int64(gb), 10) + "GB"
-	}
-	return trimZero(gb) + "GB"
+	return fmt.Sprintf("%.2fMB", mb)
 }
 
 func fmtMin(v float64) string {
@@ -239,14 +234,10 @@ func fmtSms(v float64) string {
 	return strconv.FormatInt(int64(v), 10) + "条"
 }
 
+// trimZero 保留至多两位小数并去掉末尾多余的 0（20.00→"20"，3.06→"3.06"）
 func trimZero(f float64) string {
-	// 保留至多两位小数并去掉末尾多余的 0（与移动端展示一致）
 	s := strconv.FormatFloat(f, 'f', 2, 64)
-	if i := len(s) - 1; i >= 0 && s[i] == '0' {
-		s = s[:i]
-		if i := len(s) - 1; i >= 0 && s[i] == '.' {
-			s = s[:i]
-		}
-	}
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
 	return s
 }

@@ -49,23 +49,23 @@ type QueryResult struct {
 
 // Fields 输出/推送字段开关（17 项，与 Python 版一致）
 type Fields struct {
-	City            bool `json:"city"`
-	Balance         bool `json:"balance"`
-	PlanName        bool `json:"plan_name"`
-	RealtimeFee     bool `json:"realtime_fee"`
-	BillTotal       bool `json:"bill_total"`
-	BillReal        bool `json:"bill_real"`
-	DiscountTotal   bool `json:"discount_total"`
-	BillCycle       bool `json:"bill_cycle"`
-	GeneralFlow     bool `json:"general_flow"`
-	SpecialFlow     bool `json:"special_flow"`
-	RegionalFlow    bool `json:"regional_flow"`
-	TotalFlow       bool `json:"total_flow"`
-	VoiceUsed       bool `json:"voice_used"`
-	VoiceRemaining  bool `json:"voice_remaining"`
-	SmsUsed         bool `json:"sms_used"`
-	SmsRemaining    bool `json:"sms_remaining"`
-	QueryTime       bool `json:"query_time"`
+	City           bool `json:"city"`
+	Balance        bool `json:"balance"`
+	PlanName       bool `json:"plan_name"`
+	RealtimeFee    bool `json:"realtime_fee"`
+	BillTotal      bool `json:"bill_total"`
+	BillReal       bool `json:"bill_real"`
+	DiscountTotal  bool `json:"discount_total"`
+	BillCycle      bool `json:"bill_cycle"`
+	GeneralFlow    bool `json:"general_flow"`
+	SpecialFlow    bool `json:"special_flow"`
+	RegionalFlow   bool `json:"regional_flow"`
+	TotalFlow      bool `json:"total_flow"`
+	VoiceUsed      bool `json:"voice_used"`
+	VoiceRemaining bool `json:"voice_remaining"`
+	SmsUsed        bool `json:"sms_used"`
+	SmsRemaining   bool `json:"sms_remaining"`
+	QueryTime      bool `json:"query_time"`
 }
 
 // DefaultFields Python 版默认输出字段
@@ -106,25 +106,25 @@ func FieldLabels() []struct {
 		{"general_flow", "通用流量"}, {"special_flow", "定向流量"}, {"regional_flow", "区域流量"}, {"total_flow", "总流量"},
 		{"voice_used", "语音已用"}, {"voice_remaining", "语音剩余"},
 		{"sms_used", "短信已用"}, {"sms_remaining", "短信剩余"},
-		{"query_time", "查询时间"},
+		{"query_time", "查询时间（HH:MM；多个用英文逗号分隔，如 08:00,20:00）"},
 	}
 }
 
 // PushSettings 推送设置
 type PushSettings struct {
-	BarkEnabled         bool    `json:"bark_enabled"`
-	BarkKey             string  `json:"bark_key"`
-	PushPlusEnabled     bool    `json:"pushplus_enabled"`
-	PushPlusToken       string  `json:"pushplus_token"`
-	Fields              Fields  `json:"fields"`
-	AlertOnly           bool    `json:"alert_only"`
-	AlertBalanceBelow   float64 `json:"alert_balance_below"`
-	AlertFlowPercent    int     `json:"alert_flow_percent"`
+	BarkEnabled       bool    `json:"bark_enabled"`
+	BarkKey           string  `json:"bark_key"`
+	PushPlusEnabled   bool    `json:"pushplus_enabled"`
+	PushPlusToken     string  `json:"pushplus_token"`
+	Fields            Fields  `json:"fields"`
+	AlertOnly         bool    `json:"alert_only"`
+	AlertBalanceBelow float64 `json:"alert_balance_below"`
+	AlertFlowPercent  int     `json:"alert_flow_percent"`
 }
 
 // Settings 全局设置
 type Settings struct {
-	QueryTime string       `json:"query_time"` // 每日定时查询 HH:MM
+	QueryTime string       `json:"query_time"` // 每日定时查询，支持 "HH:MM" 或 "HH:MM,HH:MM,..." 多个时刻（兼作保活）
 	Push      PushSettings `json:"push"`
 	TwoFA     struct {
 		Channel string `json:"channel"` // "none" | "bark" | "pushplus"
@@ -140,17 +140,18 @@ func (s Settings) TwoFAEnabled() bool {
 type User struct {
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"password_hash"` // scrypt hex
-	Salt         string    `json:"salt"`           // hex
+	Salt         string    `json:"salt"`          // hex
 	CreatedAt    time.Time `json:"created_at"`
 }
 
 // Account 运营商账号
 type Account struct {
 	Phone          string       `json:"phone"`
-	Carrier        string       `json:"carrier,omitempty"` // "mobile" | "unicom" | "telecom"；空串视为 mobile（旧数据兼容）
+	SortOrder      int          `json:"sort_order,omitempty"` // 列表展示/查询顺序（1 起；旧数据 0 按手机号排）
+	Carrier        string       `json:"carrier,omitempty"`    // "mobile" | "unicom" | "telecom" | "cbn"；空串视为 mobile（旧数据兼容）
 	Remark         string       `json:"remark"`
 	FieldsOverride *Fields      `json:"fields_override,omitempty"` // 每号独立输出设置（nil=跟随全局）
-	HasLoginState  bool         `json:"has_login_state"`          // 浏览器型：user-data 目录存在；HTTP 型：Token 非空
+	HasLoginState  bool         `json:"has_login_state"`           // 浏览器型：user-data 目录存在；HTTP 型：Token 非空
 	LastQuery      time.Time    `json:"last_query"`
 	LastOK         bool         `json:"last_ok"`
 	LastError      string       `json:"last_error"`
@@ -163,10 +164,12 @@ type Account struct {
 	CityCode     string `json:"city_code,omitempty"`
 	AndroidID    string `json:"android_id,omitempty"` // 短信授权绑定的设备 id（3006 设备信任用）
 
-	// 联通专用（短信验证码 HTTP 登录：Token 存 token_online）
+	// 联通专用（网页浏览器登录：WebToken 存 JUT Cookie，查询直连 mxx 域，长期有效）
+	WebToken string `json:"web_token,omitempty"`
+	// 以下为历史通道遗留字段（网关滑块/微信小程序），仅保留旧数据兼容，不再读写
 	Cookie string `json:"cookie,omitempty"`
 	AppID  string `json:"app_id,omitempty"`
-	OpenID string `json:"openid,omitempty"` // 联通微信小程序通道（自托管，用户在联通小程序登录后抓包提取，长期有效）
+	OpenID string `json:"openid,omitempty"`
 }
 
 // CarrierCode 规范化运营商代码（"" → "mobile"）
@@ -203,11 +206,11 @@ type DailyRecord struct {
 
 // Store 持久化根结构
 type Store struct {
-	mu       sync.Mutex `json:"-"`
-	path     string     `json:"-"`
-	Users    []User       `json:"users"`
-	Settings Settings    `json:"settings"`
-	Accounts []*Account   `json:"accounts"`
+	mu       sync.Mutex     `json:"-"`
+	path     string         `json:"-"`
+	Users    []User         `json:"users"`
+	Settings Settings       `json:"settings"`
+	Accounts []*Account     `json:"accounts"`
 	History  []HistoryEntry `json:"history"`
 	Daily    []DailyRecord  `json:"daily"`
 }
@@ -243,7 +246,10 @@ func LoadStore(dataDir string) (*Store, error) {
 		return nil, err
 	}
 	if s.Settings.QueryTime == "" {
-		s.Settings.QueryTime = "08:00"
+		s.Settings.QueryTime = "08:00,20:00" // 默认一天两次，兼作保活延长登录态寿命
+	} else if s.Settings.QueryTime == "08:00" {
+		// 一次性迁移：旧的单点 08:00 自动升级为保活模式
+		s.Settings.QueryTime = "08:00,20:00"
 	}
 	// 兼容旧数据：JSON 里没有渠道开关字段时，填了 key 默认启用
 	var raw map[string]json.RawMessage
@@ -389,14 +395,65 @@ func (s *Store) UpdateSettings(fn func(*Settings)) error {
 	return s.saveLocked()
 }
 
-// ListAccounts 账号列表（按手机号排序）
+// ListAccounts 账号列表（按 SortOrder 升序；旧数据 SortOrder 相同时按手机号）
 func (s *Store) ListAccounts() []*Account {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]*Account, len(s.Accounts))
 	copy(out, s.Accounts)
-	sort.Slice(out, func(i, j int) bool { return out[i].Phone < out[j].Phone })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SortOrder != out[j].SortOrder {
+			return out[i].SortOrder < out[j].SortOrder
+		}
+		return out[i].Phone < out[j].Phone
+	})
 	return out
+}
+
+// MoveAccountOrder 调整账号顺序（dir: "up" 上移 / "down" 下移），成功即持久化
+func (s *Store) MoveAccountOrder(phone, dir string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 先按展示序整理数组，再交换相邻项并重写序号
+	sorted := make([]*Account, len(s.Accounts))
+	copy(sorted, s.Accounts)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].SortOrder != sorted[j].SortOrder {
+			return sorted[i].SortOrder < sorted[j].SortOrder
+		}
+		return sorted[i].Phone < sorted[j].Phone
+	})
+	idx := -1
+	for i, a := range sorted {
+		if a.Phone == phone {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return false
+	}
+	var swap int
+	switch dir {
+	case "up":
+		if idx == 0 {
+			return false
+		}
+		swap = idx - 1
+	case "down":
+		if idx == len(sorted)-1 {
+			return false
+		}
+		swap = idx + 1
+	default:
+		return false
+	}
+	sorted[idx], sorted[swap] = sorted[swap], sorted[idx]
+	for i, a := range sorted {
+		a.SortOrder = i + 1
+	}
+	s.Accounts = sorted
+	return s.saveLocked() == nil
 }
 
 // GetAccount 查找账号
@@ -427,7 +484,14 @@ func (s *Store) UpsertAccount(phone, carrier, remark string) (*Account, error) {
 	defer s.mu.Unlock()
 	a := s.getAccountLocked(phone)
 	if a == nil {
-		a = &Account{Phone: phone, Carrier: carrier}
+		// 新账号排最后
+		maxOrder := 0
+		for _, x := range s.Accounts {
+			if x.SortOrder > maxOrder {
+				maxOrder = x.SortOrder
+			}
+		}
+		a = &Account{Phone: phone, Carrier: carrier, SortOrder: maxOrder + 1}
 		s.Accounts = append(s.Accounts, a)
 	} else if a.CarrierCode() != carrier {
 		// 运营商变更（换网重登）：更新归属并清掉旧运营商登录态
