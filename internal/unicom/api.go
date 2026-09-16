@@ -15,40 +15,38 @@ import (
 	"chinamobile-monitor/internal/loggerx"
 )
 
-// 联通网页通道（2026-09 起唯一通道）：
-// 登录：面板弹出真浏览器 → www.10010.com 自动跳 uac.10010.com 统一登录页
-// （密码登录 / 随机密码登录任选，滑块与短信验证码在真实浏览器内完成）→ 登录成功后
-// JUT Cookie 写入 .10010.com 域，面板拿到 JUT 并调用余量接口校验通过即登录完成
-// （见 weblogin.go）。
-// 查询：仅凭 JUT 一个 Cookie 直连 mxx 域 WT 表单接口（话费/余量），无第三方网关。
+// 联通通道（2026-09 起默认：短信验证码登录，纯 HTTP，无浏览器/滑块）：
+// 登录：POST sendRadomNum.htm（手机号 RSA 加密）→ 下发短信验证码；再 POST
+//   radomLogin.htm（手机号 + 验证码均 RSA 加密，loginStyle=0）完成登录，
+//   响应返回 token_online 并 Set-Cookie 写入 .10010.com 会话 Cookie（见 smslogin.go）。
+// 查询：凭登录后捕获的会话 Cookie 直连 m.client.10010.com 的 servicequerybusiness
+//   接口（话费/余量），无第三方网关、无需浏览器、无需滑块。
 //
-// 实测结论（2026-09-10）：mxx 域接口只认 JUT，SHAREJSESSIONID / acw_tc / piw /
-// u_account / ecs_cook 等一概不需要；不带 Cookie 时返回纯文本 999999。
+// 注意：mxx 域接口只认 JUT，而短信登录产出的是 m.client 会话 Cookie，因此查询必须走
+// m.client 域（同一 servicequerybusiness 后端，仅鉴权 Cookie 不同）。
 
 const (
 	// 余量查询（响应 flowSumList 单位 MB：flowtype 1=通用 2=专属 3=其他）
-	webFlowLeftURL = "https://mxx.client.10010.com/servicequerybusiness/operationservice/queryOcsPackageFlowLeftContentRevisedInJune"
+	webFlowLeftURL = "https://m.client.10010.com/servicequerybusiness/operationservice/queryOcsPackageFlowLeftContentRevisedInJune"
 	// 话费余额查询（顶层字段：curntbalancecust 当前可用余额 / totalrealfee 实时话费 /
 	// allbillfee 本月账单 / monthlyRechargeBill 本月存入）
-	webBalanceURL = "https://mxx.client.10010.com/servicequerybusiness/balancenew/accountBalancenew.htm"
-
-	// 网厅入口（未登录自动跳统一登录页，登录成功后 JUT 落到 .10010.com 域）
-	WebHallURL = "https://www.10010.com/"
+	webBalanceURL = "https://m.client.10010.com/servicequerybusiness/balancenew/accountBalancenew.htm"
 
 	webUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
 		"(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
 )
 
-// webHallFallbacks 备用网厅/掌厅入口（主入口打不开时依次尝试）
-var webHallFallbacks = []string{"https://iservice.10010.com/", "https://m.client.10010.com/"}
+// unicomReferer m.client 接口校验的 Referer/Origin（APP 掌厅域）
+const unicomReferer = "https://m.client.10010.com/"
 
-// ErrCookieInvalid JUT 已失效（服务端返回纯文本 999999），需重新登录
+// ErrCookieInvalid 会话已失效（服务端返回纯文本 999999 或 code!=0000），需重新登录
 var ErrCookieInvalid = errors.New("登录已失效，请重新登录")
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-// postWebWT mxx 域 WT 表单查询（网页通道：version=WT，票据字段留空，仅 JUT Cookie 鉴权）
-func postWebWT(ctx context.Context, rawURL, jut string) (string, error) {
+// postWebWT m.client 域 servicequerybusiness 表单查询（短信登录通道：version=WT，
+// 票据字段留空，仅会话 Cookie 鉴权）。cookie 为登录后捕获的 .10010.com 会话 Cookie 串。
+func postWebWT(ctx context.Context, rawURL, cookie string) (string, error) {
 	form := url.Values{
 		"duanlianjieabc":  {""},
 		"channelCode":     {""},
@@ -68,10 +66,10 @@ func postWebWT(ctx context.Context, rawURL, jut string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Cookie", "JUT="+jut)
+	req.Header.Set("Cookie", cookie)
 	req.Header.Set("User-Agent", webUA)
-	req.Header.Set("Origin", "https://imgxx.client.10010.com")
-	req.Header.Set("Referer", "https://imgxx.client.10010.com/")
+	req.Header.Set("Origin", unicomReferer)
+	req.Header.Set("Referer", unicomReferer)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
@@ -110,8 +108,8 @@ func checkWebCode(body, scene string) (gjson.Result, error) {
 }
 
 // QueryWebFlowLeft 余量查询（queryOcsPackageFlowLeftContentRevisedInJune，MB 单位）
-func QueryWebFlowLeft(ctx context.Context, phone, jut string, log *loggerx.Logger) (gjson.Result, string, error) {
-	body, err := postWebWT(ctx, webFlowLeftURL, jut)
+func QueryWebFlowLeft(ctx context.Context, phone, cookie string, log *loggerx.Logger) (gjson.Result, string, error) {
+	body, err := postWebWT(ctx, webFlowLeftURL, cookie)
 	if err != nil {
 		return gjson.Result{}, "", fmt.Errorf("余量查询请求失败: %w", err)
 	}
@@ -123,8 +121,8 @@ func QueryWebFlowLeft(ctx context.Context, phone, jut string, log *loggerx.Logge
 }
 
 // QueryWebBalance 话费余额查询（accountBalancenew.htm，与余量查询同域同 Cookie）
-func QueryWebBalance(ctx context.Context, phone, jut string, log *loggerx.Logger) (gjson.Result, error) {
-	body, err := postWebWT(ctx, webBalanceURL, jut)
+func QueryWebBalance(ctx context.Context, phone, cookie string, log *loggerx.Logger) (gjson.Result, error) {
+	body, err := postWebWT(ctx, webBalanceURL, cookie)
 	if err != nil {
 		return gjson.Result{}, fmt.Errorf("话费查询请求失败: %w", err)
 	}
@@ -133,16 +131,6 @@ func QueryWebBalance(ctx context.Context, phone, jut string, log *loggerx.Logger
 	}
 	res, err := checkWebCode(body, "话费查询")
 	return res, err
-}
-
-// ValidJUT 校验 JUT 是否有效（登录会话启动时 / 诊断用；有效返回 nil）
-func ValidJUT(ctx context.Context, jut string) error {
-	body, err := postWebWT(ctx, webFlowLeftURL, jut)
-	if err != nil {
-		return err
-	}
-	_, cerr := checkWebCode(body, "登录态校验")
-	return cerr
 }
 
 func truncate(s string, n int) string {

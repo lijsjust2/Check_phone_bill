@@ -73,7 +73,7 @@ func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *ru
 	}
 
 	// 首次启动时把已有账号的登录态标志同步一次
-	// （移动/广电浏览器型看 user-data 目录；电信看 token；联通看 JUT）
+	// （移动/广电浏览器型看 user-data 目录；电信看 token；联通看会话 Cookie/Token）
 	for _, a := range st.ListAccounts() {
 		_, dirErr := os.Stat(store.UserDataDir(dataDir, a.Phone))
 		switch a.CarrierCode() {
@@ -86,7 +86,7 @@ func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *ru
 				st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
 			}
 		case carrier.Unicom:
-			if a.WebToken != "" {
+			if a.Cookie != "" || a.Token != "" {
 				st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
 			}
 		case carrier.Cbn:
@@ -131,7 +131,7 @@ func cliLogin(dataDir, phone, carrierFlag string, log *loggerx.Logger, st *store
 	fmt.Printf("%s登录 → %s\n", p.Name(), phone)
 	fmt.Println(strings.Repeat("=", 50))
 	if code == carrier.Unicom {
-		fmt.Println("将弹出浏览器窗口打开联通网厅，请在窗口中完成登录（滑块/短信均在窗口内）。")
+		fmt.Println("将向该手机号发送短信验证码，请输入收到的验证码完成登录（纯 HTTP，无需浏览器）。")
 	}
 
 	flow, err := p.StartLogin(carrier.LoginParams{Phone: phone, DataDir: dataDir, Headless: false, Log: log})
@@ -166,7 +166,7 @@ func cliLogin(dataDir, phone, carrierFlag string, log *loggerx.Logger, st *store
 	case carrier.StageSuccess:
 		fmt.Println("登录成功！")
 		if code == carrier.Unicom {
-			fmt.Println("JUT 登录态已写入账号配置，之后查询不再需要浏览器。")
+			fmt.Println("联通会话 Cookie 已写入账号配置，之后查询无需浏览器。")
 		} else {
 			fmt.Printf("登录态已保存到: %s\n", store.UserDataDir(dataDir, phone))
 		}

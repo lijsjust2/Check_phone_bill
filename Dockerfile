@@ -1,7 +1,7 @@
 # ============================================================
 # 中国移动套餐用量监控（Go 版）
 # 构建阶段：编译静态二进制
-# 运行阶段：alpine + chromium（go-rod 无头浏览器查询用）
+# 运行阶段：alpine + chromium（移动号登录验证码用；联通已改为纯 HTTP 短信登录，不再需要浏览器）
 # ============================================================
 
 # ---- 构建阶段 ----
@@ -20,23 +20,18 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/chinamo
 FROM alpine:3.20
 RUN adduser -D -u 1000 app && apk add --no-cache \
     chromium nss freetype harfbuzz ttf-freefont \
-    su-exec tzdata ca-certificates \
-    tigervnc novnc websockify
+    su-exec tzdata ca-certificates
 WORKDIR /app
 COPY --from=builder /out/chinamobile-monitor /usr/local/bin/chinamobile-monitor
 COPY entrypoint.sh /entrypoint.sh
-COPY start-vnc.sh /start-vnc.sh
-RUN chmod +x /entrypoint.sh /start-vnc.sh
+RUN chmod +x /entrypoint.sh
 ENV PORT=10086 \
     DATA_DIR=/app/data \
     TZ=Asia/Shanghai \
     BROWSER_BIN=/usr/bin/chromium-browser \
     BROWSER_NO_SANDBOX=1 \
-    HOME=/home/app \
-    DISPLAY=:99 \
-    VNC_ENABLED=1 \
-    VNC_PORT=6080
+    HOME=/home/app
 VOLUME /app/data
-EXPOSE 10086 6080
+EXPOSE 10086
 # 以 root 启动执行 entrypoint（仅用于 chown 数据目录），随后降权为 app 用户
 ENTRYPOINT ["/entrypoint.sh"]

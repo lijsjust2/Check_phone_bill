@@ -13,16 +13,20 @@ import (
 	"chinamobile-monitor/internal/store"
 )
 
-// QueryPhone 查询联通账号：网页通道（JUT Cookie 直连 mxx 域，登录态长期有效，无需浏览器）
+// QueryPhone 查询联通账号：短信登录通道（会话 Cookie 直连 m.client，无需浏览器）
 func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrier.Result {
 	phone := acc.Phone
 	pr := &carrier.Result{Phone: phone, Raw: map[string]string{}}
 	start := time.Now()
 
-	jut := acc.WebToken
-	if jut == "" {
-		// 历史通道遗留账号（openid/ecs_token）已废弃，需用网页登录重新添加
-		pr.Err = "未登录，请重新添加账号并完成网页登录"
+	cookie := acc.Cookie
+	if cookie == "" && acc.Token != "" {
+		// 兜底：仅持有 token_online（短信登录回写的 Token）时拼成 Cookie
+		cookie = "token_online=" + acc.Token
+	}
+	if cookie == "" {
+		// 未完成短信验证码登录或登录态未持久化
+		pr.Err = "未登录，请重新添加账号并完成短信验证码登录"
 		carrier.MarkNotLoggedIn(pr)
 		pr.LoginExpired = true
 		return pr
@@ -31,9 +35,9 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	res, raw, err := QueryWebFlowLeft(ctx, phone, jut, log)
+	res, raw, err := QueryWebFlowLeft(ctx, phone, cookie, log)
 	if errors.Is(err, ErrCookieInvalid) {
-		pr.Err = "登录已失效，请重新添加账号并完成网页登录"
+		pr.Err = "登录已失效，请重新添加账号并完成短信验证码登录"
 		carrier.MarkNotLoggedIn(pr)
 		pr.LoginExpired = true
 		return pr
@@ -48,7 +52,7 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 	pr.Result.QueriedAt = time.Now().Format("2006-01-02 15:04:05")
 
 	// 话费余额（同域同 Cookie，尽力读取，失败不影响余量结果）
-	if bal, berr := QueryWebBalance(ctx, phone, jut, log); berr == nil {
+	if bal, berr := QueryWebBalance(ctx, phone, cookie, log); berr == nil {
 		ParseBalance(pr.Result, bal)
 	} else if !errors.Is(berr, ErrCookieInvalid) && log != nil {
 		log.Info("[%s] 联通话费余额获取失败: %v", phone, berr)

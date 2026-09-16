@@ -99,11 +99,6 @@
     <!-- step2 验证码 / 登录进度 -->
     <div id="addStep2" style="display:none">
       <p class="muted small" id="flowStatus">正在启动浏览器...</p>
-      <!-- 无头 Docker 环境的联通登录：远程桌面（noVNC）入口 -->
-      <div id="vncWrap" style="display:none;margin-top:10px">
-        <a id="vncLink" class="btn primary" target="_blank" rel="noopener">在浏览器中打开登录窗口（远程桌面）</a>
-        <p class="muted small" style="margin-top:6px">上方按钮会在新标签页打开容器内的浏览器桌面，请在里面完成联通滑块与短信验证；登录成功后会自动关闭，此页面也会自动更新。</p>
-      </div>
       <!-- 图片验证码（电信设备注册 / 广电登录第一步） -->
       <div style="margin-top:12px" id="telecomCaptchaWrap" hidden>
         <div class="field">
@@ -431,19 +426,16 @@ function updateStep1Form() {
   document.getElementById('passwordField').style.display = info.needs_password ? 'block' : 'none';
   const btn = document.getElementById('sendBtn');
   btn.style.display = '';
-  if (flowCarrier === 'unicom') {
-    // 联通网页登录：弹出真浏览器窗口，用户在窗口内完成登录
-    btn.textContent = '打开登录窗口';
-    document.getElementById('step1Hint').textContent = '点击「打开登录窗口」后，将弹出浏览器窗口打开联通网厅；服务密码登录或短信验证码登录均可（滑块与短信均在窗口内完成），登录成功后窗口自动关闭';
-  } else if (info.needs_password) {
+  if (info.needs_password) {
     btn.textContent = '立即登录';
     document.getElementById('step1Hint').textContent = '点击「立即登录」后，系统将使用服务密码登录中国电信；首次登录需短信验证绑定设备';
   } else if (flowCarrier === 'cbn') {
     btn.textContent = '发送验证码';
     document.getElementById('step1Hint').textContent = '点击「发送验证码」后，将连接广电网上营业厅并显示图片验证码，输入图片字符后发送短信验证码';
   } else {
+    // 移动 / 联通：短信验证码登录（纯 HTTP，无浏览器）
     btn.textContent = '发送验证码';
-    document.getElementById('step1Hint').textContent = '点击「发送验证码」后，系统将打开登录页并自动填写手机号';
+    document.getElementById('step1Hint').textContent = '点击「发送验证码」后，系统将向该手机号发送短信验证码，输入验证码即可完成登录';
   }
 }
 
@@ -503,11 +495,10 @@ async function startLoginFlow() {
   if (info.needs_password && !password) { alert('请输入服务密码'); return; }
   const btn = document.getElementById('sendBtn');
   btn.disabled = true;
-  btn.textContent = flowCarrier === 'unicom' ? '正在打开...' : (info.needs_password ? '登录中...' : '发送中...');
+  btn.textContent = info.needs_password ? '登录中...' : '发送中...';
   const j = await api('/api/login-flow/start', { method: 'POST', body: { phone, remark, carrier: flowCarrier, password } });
   btn.disabled = false;
-  btn.textContent = flowCarrier === 'unicom' ? '打开登录窗口'
-    : (info.needs_password ? '立即登录' : '发送验证码');
+  btn.textContent = info.needs_password ? '立即登录' : '发送验证码';
   if (!j.ok) { showError(j.error); return; }
   flowPhone = phone;
   document.getElementById('addStep1').style.display = 'none';
@@ -517,7 +508,7 @@ async function startLoginFlow() {
   document.getElementById('submitCodeBtn').style.display = info.needs_sms_code ? '' : 'none';
   document.getElementById('flowStatus').textContent = info.needs_sms_code
     ? (flowCarrier === 'cbn' ? '正在连接中国广电网上营业厅...' : '正在启动浏览器...')
-    : (flowCarrier === 'unicom' ? '正在打开联通网厅登录窗口，请在窗口内完成登录...' : '正在通过服务密码登录' + info.name + '...');
+    : ('正在通过服务密码登录' + info.name + '...');
   document.getElementById('addCode').value = '';
   pollFlow();
 }
@@ -529,21 +520,12 @@ function pollFlow() {
     if (!j.active) {
       // 登录会话已结束：按结束原因提示，避免弹窗停在旧状态
       clearInterval(flowTimer); flowTimer = null;
-      document.getElementById('vncWrap').style.display = 'none';
       if (j.stage === 'success') { flowDone(); return; }
       flowEnded(j);
       return;
     }
     const el = document.getElementById('flowStatus');
     el.textContent = j.stage_text + (j.msg && j.msg !== j.stage_text ? '：' + j.msg : '');
-    // 联通在无头 Docker 环境：展示远程桌面（noVNC）入口
-    const vncWrap = document.getElementById('vncWrap');
-    if (flowCarrier === 'unicom' && j.vnc_url) {
-      document.getElementById('vncLink').href = j.vnc_url;
-      vncWrap.style.display = 'block';
-    } else {
-      vncWrap.style.display = 'none';
-    }
     const done = j.stage === 'success' || j.stage === 'error' || j.stage === 'closed';
     document.getElementById('submitCodeBtn').disabled = done || j.stage === 'submitting';
     // 电信设备注册：need_image_captcha 阶段展示图片验证码
