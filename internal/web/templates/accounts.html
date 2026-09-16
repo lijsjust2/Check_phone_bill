@@ -54,7 +54,7 @@
         </button>
         <button type="button" class="carrier-card" data-carrier="unicom" onclick="selectCarrier('unicom')">
           <span class="carrier-name">中国联通</span>
-          <span class="muted small">网页浏览器登录</span>
+          <span class="muted small">短信验证码登录</span>
         </button>
         <button type="button" class="carrier-card" data-carrier="telecom" onclick="selectCarrier('telecom')">
           <span class="carrier-name">中国电信</span>
@@ -390,7 +390,7 @@ const carrierMap = {};
 // 静态兜底（接口未返回时按此渲染表单）
 const CARRIER_FALLBACK = {
   mobile: { name: '中国移动', needs_password: false, needs_sms_code: true },
-  unicom: { name: '中国联通', needs_password: false, needs_sms_code: false },
+  unicom: { name: '中国联通', needs_password: false, needs_sms_code: true },
   telecom: { name: '中国电信', needs_password: true, needs_sms_code: false },
   cbn: { name: '中国广电', needs_password: false, needs_sms_code: true },
 };
@@ -507,7 +507,8 @@ async function startLoginFlow() {
   document.getElementById('codeField').style.display = info.needs_sms_code ? 'block' : 'none';
   document.getElementById('submitCodeBtn').style.display = info.needs_sms_code ? '' : 'none';
   document.getElementById('flowStatus').textContent = info.needs_sms_code
-    ? (flowCarrier === 'cbn' ? '正在连接中国广电网上营业厅...' : '正在启动浏览器...')
+    ? (flowCarrier === 'cbn' ? '正在连接中国广电网上营业厅...'
+       : flowCarrier === 'unicom' ? '正在发送短信验证码...' : '正在启动浏览器...')
     : ('正在通过服务密码登录' + info.name + '...');
   document.getElementById('addCode').value = '';
   pollFlow();
