@@ -164,13 +164,15 @@ type Account struct {
 	CityCode     string `json:"city_code,omitempty"`
 	AndroidID    string `json:"android_id,omitempty"` // 短信授权绑定的设备 id（3006 设备信任用）
 
-	// 联通遗留：旧版网页登录的 JUT Cookie（仅 mxx 域有效）；新版短信登录不再写入，仅兼容旧数据
+	// WebToken 联通遗留：旧版网页登录的 JUT Cookie / 短信登录的会话凭证，
+	// 现通道（微信小程序 OpenID）不再写入，仅兼容旧数据
 	WebToken string `json:"web_token,omitempty"`
-	// Cookie 会话 Cookie（联通短信登录：m.client 域会话串；广电：会话 JSON 串）
+	// Cookie 会话 Cookie（广电：会话 JSON 串；联通旧短信通道遗留）
 	Cookie string `json:"cookie,omitempty"`
-	// 以下为历史通道遗留字段（网关滑块/微信小程序），仅保留旧数据兼容，不再读写
-	AppID  string `json:"app_id,omitempty"`
+	// OpenID 联通专用：微信小程序 OpenID（长期稳定凭证，ha_unicom_bill 协议）
 	OpenID string `json:"openid,omitempty"`
+	// AppID 历史通道（网关滑块）遗留字段，仅保留旧数据兼容
+	AppID string `json:"app_id,omitempty"`
 }
 
 // CarrierCode 规范化运营商代码（"" → "mobile"）

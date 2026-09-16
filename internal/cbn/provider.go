@@ -15,6 +15,7 @@ func (Provider) Code() string        { return carrier.Cbn }
 func (Provider) Name() string        { return "中国广电" }
 func (Provider) NeedsPassword() bool { return false }
 func (Provider) NeedsSMSCode() bool  { return true }
+func (Provider) NeedsOpenID() bool   { return false }
 
 // Query 查询单个广电账号（Cookie 会话；过期需重新登录）
 func (Provider) Query(acc *store.Account, dataDir string, log *loggerx.Logger) *carrier.Result {

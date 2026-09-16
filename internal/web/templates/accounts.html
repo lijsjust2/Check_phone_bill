@@ -15,7 +15,7 @@
 
 <div id="emptyTip" class="card" style="display:none;text-align:center">
   <p class="muted">还没有账号</p>
-  <p class="muted small">点击右上角「添加账号」，输入手机号并完成短信验证码登录</p>
+  <p class="muted small">点击右上角「添加账号」，输入手机号并完成登录验证</p>
 </div>
 
 <div class="card table-card" id="listCard" style="display:none">
@@ -54,7 +54,7 @@
         </button>
         <button type="button" class="carrier-card" data-carrier="unicom" onclick="selectCarrier('unicom')">
           <span class="carrier-name">中国联通</span>
-          <span class="muted small">短信验证码登录</span>
+          <span class="muted small">微信小程序 OpenID 登录</span>
         </button>
         <button type="button" class="carrier-card" data-carrier="telecom" onclick="selectCarrier('telecom')">
           <span class="carrier-name">中国电信</span>
@@ -84,6 +84,10 @@
         <div class="field" id="passwordField" style="display:none">
           <label>服务密码</label>
           <input id="addPassword" type="password" maxlength="20" placeholder="请输入中国电信服务密码">
+        </div>
+        <div class="field" id="openidField" style="display:none">
+          <label>微信小程序 OpenID</label>
+          <input id="addOpenid" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="o 开头的 28 位字符串（抓包获取）">
         </div>
         <div class="field">
           <label>备注（可选）</label>
@@ -385,14 +389,14 @@ function startPolling() {
 let flowTimer = null;
 let flowPhone = '';
 let flowCarrier = ''; // 用户选择的运营商（不按号段猜测，携号转网以用户选择为准）
-// 已注册运营商（/api/carriers），key → {code,name,needs_password,needs_sms_code}
+// 已注册运营商（/api/carriers），key → {code,name,needs_password,needs_sms_code,needs_openid}
 const carrierMap = {};
 // 静态兜底（接口未返回时按此渲染表单）
 const CARRIER_FALLBACK = {
-  mobile: { name: '中国移动', needs_password: false, needs_sms_code: true },
-  unicom: { name: '中国联通', needs_password: false, needs_sms_code: true },
-  telecom: { name: '中国电信', needs_password: true, needs_sms_code: false },
-  cbn: { name: '中国广电', needs_password: false, needs_sms_code: true },
+  mobile: { name: '中国移动', needs_password: false, needs_sms_code: true, needs_openid: false },
+  unicom: { name: '中国联通', needs_password: false, needs_sms_code: false, needs_openid: true },
+  telecom: { name: '中国电信', needs_password: true, needs_sms_code: false, needs_openid: false },
+  cbn: { name: '中国广电', needs_password: false, needs_sms_code: true, needs_openid: false },
 };
 
 function carrierName(code) {
@@ -424,16 +428,21 @@ function updateStep1Form() {
   const info = carrierInfo(flowCarrier);
   document.getElementById('carrierChip').textContent = info.name + '（点击更换）';
   document.getElementById('passwordField').style.display = info.needs_password ? 'block' : 'none';
+  document.getElementById('openidField').style.display = info.needs_openid ? 'block' : 'none';
   const btn = document.getElementById('sendBtn');
   btn.style.display = '';
   if (info.needs_password) {
     btn.textContent = '立即登录';
     document.getElementById('step1Hint').textContent = '点击「立即登录」后，系统将使用服务密码登录中国电信；首次登录需短信验证绑定设备';
+  } else if (info.needs_openid) {
+    // 联通：微信小程序 OpenID 登录（纯 HTTP，无浏览器/短信/滑块）
+    btn.textContent = '使用该 OpenID 登录';
+    document.getElementById('step1Hint').textContent = '电脑微信打开「中国联通」小程序并用抓包工具从 mina.10010.com 请求中提取 openid，粘贴到上方即可长期使用';
   } else if (flowCarrier === 'cbn') {
     btn.textContent = '发送验证码';
     document.getElementById('step1Hint').textContent = '点击「发送验证码」后，将连接广电网上营业厅并显示图片验证码，输入图片字符后发送短信验证码';
   } else {
-    // 移动 / 联通：短信验证码登录（纯 HTTP，无浏览器）
+    // 移动：短信验证码登录（纯 HTTP，无浏览器）
     btn.textContent = '发送验证码';
     document.getElementById('step1Hint').textContent = '点击「发送验证码」后，系统将向该手机号发送短信验证码，输入验证码即可完成登录';
   }
@@ -452,7 +461,7 @@ function backToStep0() {
   document.getElementById('addStep0').style.display = 'block';
 }
 
-function openAddModal(phone, carrier) {
+function openAddModal(phone, carrier, openid) {
   closeAddModal();
   document.getElementById('addModal').style.display = 'flex';
   document.getElementById('addStep0').style.display = 'block';
@@ -462,6 +471,7 @@ function openAddModal(phone, carrier) {
   document.getElementById('addRemark').value = '';
   document.getElementById('addCode').value = '';
   document.getElementById('addPassword').value = '';
+  document.getElementById('addOpenid').value = openid || '';
   document.getElementById('telecomCaptchaWrap').hidden = true;
   document.getElementById('telecomCaptcha').value = '';
   document.getElementById('telecomCaptchaBtn').disabled = false;
@@ -490,26 +500,27 @@ async function startLoginFlow() {
   const phone = document.getElementById('addPhone').value.trim();
   const remark = document.getElementById('addRemark').value.trim();
   const password = document.getElementById('addPassword').value.trim();
+  const openid = document.getElementById('addOpenid').value.trim();
   const info = carrierInfo(flowCarrier);
   if (!/^1\d{10}$/.test(phone)) { alert('请输入正确的 11 位手机号'); return; }
   if (info.needs_password && !password) { alert('请输入服务密码'); return; }
+  if (info.needs_openid && !openid) { alert('请填写微信小程序 OpenID'); return; }
   const btn = document.getElementById('sendBtn');
   btn.disabled = true;
-  btn.textContent = info.needs_password ? '登录中...' : '发送中...';
-  const j = await api('/api/login-flow/start', { method: 'POST', body: { phone, remark, carrier: flowCarrier, password } });
+  btn.textContent = info.needs_password ? '登录中...' : info.needs_openid ? '验证中...' : '发送中...';
+  const j = await api('/api/login-flow/start', { method: 'POST', body: { phone, remark, carrier: flowCarrier, password, openid } });
   btn.disabled = false;
-  btn.textContent = info.needs_password ? '立即登录' : '发送验证码';
+  btn.textContent = info.needs_password ? '立即登录' : info.needs_openid ? '使用该 OpenID 登录' : '发送验证码';
   if (!j.ok) { showError(j.error); return; }
   flowPhone = phone;
   document.getElementById('addStep1').style.display = 'none';
   document.getElementById('addStep2').style.display = 'block';
-  // 验证码型：显示验证码输入；密码型/网页登录型：仅显示进度
+  // 验证码型：显示验证码输入；密码型/OpenID 型：仅显示进度
   document.getElementById('codeField').style.display = info.needs_sms_code ? 'block' : 'none';
   document.getElementById('submitCodeBtn').style.display = info.needs_sms_code ? '' : 'none';
   document.getElementById('flowStatus').textContent = info.needs_sms_code
-    ? (flowCarrier === 'cbn' ? '正在连接中国广电网上营业厅...'
-       : flowCarrier === 'unicom' ? '正在发送短信验证码...' : '正在启动浏览器...')
-    : ('正在通过服务密码登录' + info.name + '...');
+    ? (flowCarrier === 'cbn' ? '正在连接中国广电网上营业厅...' : '正在启动浏览器...')
+    : (info.needs_openid ? '正在验证 OpenID...' : '正在通过服务密码登录' + info.name + '...');
   document.getElementById('addCode').value = '';
   pollFlow();
 }
@@ -749,7 +760,7 @@ function closeDetailModal() { document.getElementById('detailModal').style.displ
 function detailRelogin() {
   if (!detailAccount) return;
   closeDetailModal();
-  openAddModal(detailAccount.phone, detailAccount.carrier);
+  openAddModal(detailAccount.phone, detailAccount.carrier, detailAccount.openid);
 }
 function detailEdit() {
   if (!detailAccount) return;

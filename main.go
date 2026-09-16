@@ -37,6 +37,7 @@ func main() {
 	port := flag.Int("port", portDefault, "Web 面板端口")
 	loginCmd := flag.String("login", "", "本地登录指定手机号（弹出浏览器窗口）")
 	carrierCmd := flag.String("carrier", "", "配合 -login 指定运营商：mobile|unicom|telecom|cbn（新号码必填，否则按移动处理）")
+	openidCmd := flag.String("openid", "", "配合 -login -carrier unicom：微信小程序 OpenID（联通登录凭证）")
 	queryCmd := flag.String("query", "", "命令行查询（可传 * 查询全部账号）")
 	saveJSON := flag.Bool("json", false, "查询时保存原始响应 JSON")
 	flag.Parse()
@@ -58,7 +59,7 @@ func main() {
 
 	switch {
 	case *loginCmd != "":
-		cliLogin(*dataDir, *loginCmd, strings.TrimSpace(*carrierCmd), log, st)
+		cliLogin(*dataDir, *loginCmd, strings.TrimSpace(*carrierCmd), strings.TrimSpace(*openidCmd), log, st)
 	case *queryCmd != "":
 		cliQuery(*dataDir, *queryCmd, *saveJSON, log, st, r)
 	default:
@@ -73,7 +74,7 @@ func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *ru
 	}
 
 	// 首次启动时把已有账号的登录态标志同步一次
-	// （移动/广电浏览器型看 user-data 目录；电信看 token；联通看会话 Cookie/Token）
+	// （移动浏览器型看 user-data 目录；电信看 token；联通看 OpenID；广电看会话 Cookie）
 	for _, a := range st.ListAccounts() {
 		_, dirErr := os.Stat(store.UserDataDir(dataDir, a.Phone))
 		switch a.CarrierCode() {
@@ -86,7 +87,7 @@ func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *ru
 				st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
 			}
 		case carrier.Unicom:
-			if a.Cookie != "" || a.Token != "" {
+			if a.OpenID != "" {
 				st.UpdateAccount(a.Phone, func(x *store.Account) { x.HasLoginState = true })
 			}
 		case carrier.Cbn:
@@ -106,8 +107,8 @@ func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *ru
 	}
 }
 
-// cliLogin 本地有头浏览器登录（与 Python 版 --login 行为一致，按账号运营商分发）
-func cliLogin(dataDir, phone, carrierFlag string, log *loggerx.Logger, st *store.Store) {
+// cliLogin 本地登录（按账号运营商分发；浏览器型弹出窗口，联通用 OpenID 凭证）
+func cliLogin(dataDir, phone, carrierFlag, openidFlag string, log *loggerx.Logger, st *store.Store) {
 	if !store.ValidPhone(phone) {
 		fmt.Println("手机号格式不正确")
 		os.Exit(1)
@@ -126,15 +127,24 @@ func cliLogin(dataDir, phone, carrierFlag string, log *loggerx.Logger, st *store
 		os.Exit(1)
 	}
 	p := carrier.Get(code)
+	if p.NeedsOpenID() && openidFlag == "" {
+		if acc := st.GetAccount(phone); acc != nil && acc.OpenID != "" {
+			openidFlag = acc.OpenID // 已配置过 OpenID 的账号重新登录时复用
+		}
+	}
+	if p.NeedsOpenID() && openidFlag == "" {
+		fmt.Println("联通登录需要微信小程序 OpenID，请通过 -openid 参数传入（抓包方法见 README）")
+		os.Exit(1)
+	}
 
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Printf("%s登录 → %s\n", p.Name(), phone)
 	fmt.Println(strings.Repeat("=", 50))
 	if code == carrier.Unicom {
-		fmt.Println("将向该手机号发送短信验证码，请输入收到的验证码完成登录（纯 HTTP，无需浏览器）。")
+		fmt.Println("将验证微信小程序 OpenID（纯 HTTP，无需浏览器、无需短信验证码）。")
 	}
 
-	flow, err := p.StartLogin(carrier.LoginParams{Phone: phone, DataDir: dataDir, Headless: false, Log: log})
+	flow, err := p.StartLogin(carrier.LoginParams{Phone: phone, OpenID: openidFlag, DataDir: dataDir, Headless: false, Log: log})
 	if err != nil {
 		fmt.Println("启动登录失败:", err)
 		os.Exit(1)
@@ -166,7 +176,7 @@ func cliLogin(dataDir, phone, carrierFlag string, log *loggerx.Logger, st *store
 	case carrier.StageSuccess:
 		fmt.Println("登录成功！")
 		if code == carrier.Unicom {
-			fmt.Println("联通会话 Cookie 已写入账号配置，之后查询无需浏览器。")
+			fmt.Println("联通微信小程序 OpenID 已写入账号配置，之后查询无需浏览器。")
 		} else {
 			fmt.Printf("登录态已保存到: %s\n", store.UserDataDir(dataDir, phone))
 		}

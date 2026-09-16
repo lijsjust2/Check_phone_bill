@@ -99,6 +99,7 @@ type LoginStateSaver interface {
 type LoginParams struct {
 	Phone     string
 	Password  string // 电信服务密码；验证码型运营商忽略
+	OpenID    string // 联通专用：微信小程序 OpenID（长期凭证，替代短信/网页登录）
 	AndroidID string // 电信专用：已绑定设备 id（重新登录时复用，跳过设备注册）
 	DataDir   string
 	Headless  bool // 浏览器型：Web 面板无头 / CLI 有头
@@ -143,8 +144,10 @@ type Provider interface {
 	Name() string
 	// NeedsPassword 前端表单切换依据（电信 true：需服务密码）
 	NeedsPassword() bool
-	// NeedsSMSCode 前端验证码输入框显隐依据（移动/联通 true）
+	// NeedsSMSCode 前端验证码输入框显隐依据（移动/广电 true）
 	NeedsSMSCode() bool
+	// NeedsOpenID 前端 OpenID 输入框显隐依据（联通 true：微信小程序 OpenID）
+	NeedsOpenID() bool
 	// Query 查询余量：浏览器型读 dataDir 下登录态目录；HTTP 型读 acc.Token
 	Query(acc *store.Account, dataDir string, log *loggerx.Logger) *Result
 	// StartLogin 异步启动登录会话

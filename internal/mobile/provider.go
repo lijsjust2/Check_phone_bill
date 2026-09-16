@@ -15,6 +15,7 @@ func (Provider) Code() string        { return carrier.Mobile }
 func (Provider) Name() string        { return "中国移动" }
 func (Provider) NeedsPassword() bool { return false }
 func (Provider) NeedsSMSCode() bool  { return true }
+func (Provider) NeedsOpenID() bool   { return false }
 
 // Query 查询单个移动账号
 func (Provider) Query(acc *store.Account, dataDir string, log *loggerx.Logger) *carrier.Result {

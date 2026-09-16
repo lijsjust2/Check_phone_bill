@@ -15,6 +15,7 @@ func (Provider) Code() string        { return carrier.Telecom }
 func (Provider) Name() string        { return "中国电信" }
 func (Provider) NeedsPassword() bool { return true }
 func (Provider) NeedsSMSCode() bool  { return false }
+func (Provider) NeedsOpenID() bool   { return false }
 
 // Query 查询单个电信账号（token 失效自动重登）
 func (Provider) Query(acc *store.Account, dataDir string, log *loggerx.Logger) *carrier.Result {

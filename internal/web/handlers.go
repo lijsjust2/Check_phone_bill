@@ -282,6 +282,7 @@ type accountJSON struct {
 	LastError     string             `json:"last_error"`
 	Lines         []string           `json:"lines"`
 	Result        *store.QueryResult `json:"result,omitempty"`
+	OpenID        string             `json:"openid,omitempty"` // 联通：已配置的微信小程序 OpenID（重新登录时预填）
 }
 
 func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
@@ -307,6 +308,7 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
 				LastError:     a.LastError,
 				Lines:         lines,
 				Result:        a.LastResult,
+				OpenID:        a.OpenID,
 			})
 		}
 		writeJSON(w, map[string]interface{}{"ok": true, "accounts": out})
@@ -400,12 +402,14 @@ func (s *Server) apiCarriers(w http.ResponseWriter, r *http.Request) {
 		Name          string `json:"name"`
 		NeedsPassword bool   `json:"needs_password"`
 		NeedsSMSCode  bool   `json:"needs_sms_code"`
+		NeedsOpenID   bool   `json:"needs_openid"`
 	}
 	out := []carrierInfo{}
 	for _, p := range carrier.All() {
 		out = append(out, carrierInfo{
 			Code: p.Code(), Name: p.Name(),
 			NeedsPassword: p.NeedsPassword(), NeedsSMSCode: p.NeedsSMSCode(),
+			NeedsOpenID: p.NeedsOpenID(),
 		})
 	}
 	writeJSON(w, map[string]interface{}{"ok": true, "carriers": out})
@@ -420,6 +424,7 @@ func (s *Server) apiLoginFlowStart(w http.ResponseWriter, r *http.Request) {
 		Carrier  string `json:"carrier"`
 		Remark   string `json:"remark"`
 		Password string `json:"password"` // 电信服务密码
+		OpenID   string `json:"openid"`   // 联通微信小程序 OpenID
 	}
 	if err := s.decodeBody(r, &req); err != nil {
 		s.apiFail(w, "参数错误")
@@ -438,6 +443,10 @@ func (s *Server) apiLoginFlowStart(w http.ResponseWriter, r *http.Request) {
 		s.apiFail(w, "请填写服务密码")
 		return
 	}
+	if p.NeedsOpenID() && strings.TrimSpace(req.OpenID) == "" {
+		s.apiFail(w, "请填写微信小程序 OpenID")
+		return
+	}
 	if _, err := s.st.UpsertAccount(req.Phone, req.Carrier, req.Remark); err != nil {
 		s.apiFail(w, err.Error())
 		return
@@ -452,9 +461,10 @@ func (s *Server) apiLoginFlowStart(w http.ResponseWriter, r *http.Request) {
 	if err := s.flows.Start(p, carrier.LoginParams{
 		Phone:     req.Phone,
 		Password:  strings.TrimSpace(req.Password),
+		OpenID:    strings.TrimSpace(req.OpenID),
 		AndroidID: androidID,
 		DataDir:   s.dataDir(),
-		Headless:  true, // 联通短信登录为纯 HTTP，所有运营商全程无头
+		Headless:  true, // 联通 OpenID 登录为纯 HTTP，所有运营商全程无头
 		Log:       s.log,
 	}); err != nil {
 		s.apiFail(w, err.Error())
