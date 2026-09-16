@@ -569,7 +569,13 @@ function flowEnded(j) {
     // msg 已按场景区分：已提交验证码（登录态可能已保存）/ 未提交（需重新登录）
     text = '浏览器窗口已关闭：' + (j.msg || '登录结果未确认');
   } else {
-    const reason = j.stage_text ? j.stage_text + (j.msg && j.msg !== j.stage_text ? '：' + j.msg : '') : '';
+    // error 阶段后端已给出具体原因，直接展示，避免「发生错误：」套娃
+    let reason = '';
+    if (j.stage === 'error' && j.msg) {
+      reason = j.msg;
+    } else if (j.stage_text) {
+      reason = j.stage_text + (j.msg && j.msg !== j.stage_text ? '：' + j.msg : '');
+    }
     text = '登录会话已结束' + (reason ? '：' + reason : '，请重新发起登录');
   }
   el.textContent = text;

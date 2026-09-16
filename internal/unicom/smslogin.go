@@ -38,6 +38,10 @@ const (
 	smsSendURL  = "https://m.client.10010.com/mobileService/sendRadomNum.htm"
 	smsLoginURL = "https://m.client.10010.com/mobileService/radomLogin.htm"
 
+	// 联通安全风控返回码
+	riskNeedCaptcha = "ECS99998" // 当前账号登录需要图形验证码校验
+	riskBlocked     = "ECS99999" // 触发安全风控
+
 	loginUA = "Mozilla/5.0 (Linux; Android 13; LE2100 Build/TP1A.220905.001; wv) " +
 		"AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/103.0.5060.129 " +
 		"Mobile Safari/537.36; unicom{version:android@10.0100};devicetype{deviceBrand:OnePlus,deviceModel:LE2100};{yw_code:}"
@@ -163,12 +167,35 @@ func (s *smsSession) sendCode() error {
 	}
 	r := gjson.Parse(body)
 	if c := r.Get("code").Str; c != "" && c != "0000" {
-		if d := r.Get("desc").Str; d != "" {
-			return fmt.Errorf("发送验证码失败: %s", d)
-		}
-		return fmt.Errorf("发送验证码失败( code=%s )", c)
+		return sendCodeErr(c, r)
 	}
 	return nil
+}
+
+// unicomErrText 提取联通错误描述（不同接口字段名不一致：desc / dsc / mainDesc / msg）
+func unicomErrText(r gjson.Result) string {
+	for _, k := range []string{"desc", "dsc", "mainDesc", "msg"} {
+		if v := r.Get(k).Str; v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// sendCodeErr 将联通返回码翻译为可读错误（风控类返回码给出可操作的解除指引）
+func sendCodeErr(code string, r gjson.Result) error {
+	d := unicomErrText(r)
+	switch code {
+	case riskNeedCaptcha, riskBlocked:
+		if d == "" {
+			d = "账号触发安全风控"
+		}
+		return fmt.Errorf("联通风控拦截(%s)：%s。请关闭 WiFi 改用 4G/5G 流量打开「中国联通」APP 手动登录一次以解除风控，稍后重试", code, d)
+	}
+	if d != "" {
+		return fmt.Errorf("发送验证码失败: %s", d)
+	}
+	return fmt.Errorf("发送验证码失败( code=%s )", code)
 }
 
 // login 用短信验证码登录（radomLogin.htm）
@@ -188,7 +215,7 @@ func (s *smsSession) login(code string) (*loginState, error) {
 		ck = "token_online=" + token
 	}
 	if token == "" {
-		if d := r.Get("desc").Str; d != "" {
+		if d := unicomErrText(r); d != "" {
 			return nil, fmt.Errorf("登录失败: %s", d)
 		}
 		return nil, fmt.Errorf("登录失败：未获取到 token（请确认验证码是否正确）")
@@ -321,10 +348,14 @@ func (s *smsSession) waitInput(ch chan string) (string, bool) {
 func (s *smsSession) setStage(stage, msg string) {
 	s.mu.Lock()
 	s.stage = stage
+	s.msg = msg
 	s.mu.Unlock()
 }
 
 func (s *smsSession) finishError(err error) {
+	if s.log != nil {
+		s.log.Error("[%s] 联通登录失败: %v", s.phone, err)
+	}
 	s.setStage(carrier.StageError, err.Error())
 }
 
