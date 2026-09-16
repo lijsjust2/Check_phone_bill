@@ -25,8 +25,12 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 		cookie = "token_online=" + acc.Token
 	}
 	if cookie == "" {
-		// 未完成短信验证码登录或登录态未持久化
-		pr.Err = "未登录，请重新添加账号并完成短信验证码登录"
+		// 旧版网页登录（JUT）只对 mxx 域有效，新版短信登录走 m.client 会话 Cookie
+		if acc.WebToken != "" {
+			pr.Err = "该账号为旧版网页登录(JUT)状态，已不再支持，请重新添加账号并完成短信验证码登录"
+		} else {
+			pr.Err = "未登录，请重新添加账号并完成短信验证码登录"
+		}
 		carrier.MarkNotLoggedIn(pr)
 		pr.LoginExpired = true
 		return pr
