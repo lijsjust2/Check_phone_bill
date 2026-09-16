@@ -1,4 +1,4 @@
-﻿name: Docker Build and Release
+name: Docker Build and Release
 
 on:
   push:
@@ -116,17 +116,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', steps.rel.outputs.version) }}
-          name: ChinaMobile Monitor v${{ steps.rel.outputs.version }}
+          name: 话费监控 v${{ steps.rel.outputs.version }}
           token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             chinamobile-monitor_*_linux_*.tar.gz
             checksums.txt
           body: |
-            ## 中国移动套餐用量监控（Go 版）v${{ steps.rel.outputs.version }}
+            ## 四网话费监控 v${{ steps.rel.outputs.version }}
+
+            移动 / 联通 / 电信 / 广电四网话费余额与套餐用量监控，定时自动查询，余额不足自动推送。
 
             ### 支持架构
-            - **AMD64** (x86_64) — 普通 PC / 服务器 / 云主机
-            - **ARM64** (aarch64) — 树莓派 / ARM 服务器 / ARM 云主机
+            - **AMD64** (x86_64) — 普通 PC / 服务器 / 云主机 / 飞牛OS x86 主机
+            - **ARM64** (aarch64) — 树莓派 / ARM 服务器 / ARM 盒子 / 飞牛OS ARM 主机
 
             ### 从 Releases 下载镜像离线部署
             ```bash
@@ -150,6 +152,6 @@ jobs:
             ```
 
             ### 数据与配置
-            - 数据目录挂载到 `/app/data`（含账号登录态、设置、日志）
-            - 环境变量：`PORT`（默认 10086）、`TZ`
-            - 镜像内置 Chromium，无需额外配置浏览器
+            - 数据目录挂载到 `/app/data`（含账号登录态、设置、每日快照、日志）
+            - 环境变量：`PORT`（默认 10086）、`TZ`（默认 Asia/Shanghai）
+            - 镜像内置 Chromium（移动号登录/查询用），无需额外配置浏览器
