@@ -106,7 +106,7 @@ func FieldLabels() []struct {
 		{"general_flow", "通用流量"}, {"special_flow", "定向流量"}, {"regional_flow", "区域流量"}, {"total_flow", "总流量"},
 		{"voice_used", "语音已用"}, {"voice_remaining", "语音剩余"},
 		{"sms_used", "短信已用"}, {"sms_remaining", "短信剩余"},
-		{"query_time", "查询时间（HH:MM；多个用英文逗号分隔，如 08:00,20:00）"},
+		{"query_time", "每日查询时间（HH:MM；默认 08:00，可填多个用逗号分隔）"},
 	}
 }
 
@@ -249,10 +249,7 @@ func LoadStore(dataDir string) (*Store, error) {
 		return nil, err
 	}
 	if s.Settings.QueryTime == "" {
-		s.Settings.QueryTime = "08:00,20:00" // 默认一天两次，兼作保活延长登录态寿命
-	} else if s.Settings.QueryTime == "08:00" {
-		// 一次性迁移：旧的单点 08:00 自动升级为保活模式
-		s.Settings.QueryTime = "08:00,20:00"
+		s.Settings.QueryTime = "08:00" // 默认每天一次
 	}
 	// 兼容旧数据：JSON 里没有渠道开关字段时，填了 key 默认启用
 	var raw map[string]json.RawMessage

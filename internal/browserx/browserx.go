@@ -77,7 +77,8 @@ func systemBrowserCandidates() []string {
 
 // LaunchBrowser 按项目约定启动 Chromium（复用登录态目录）
 func LaunchBrowser(userDataDir string, headless bool) (*rod.Browser, error) {
-	// 先清理该目录下残留的浏览器进程（上次异常退出留下的，会锁住 profile 文件）
+	// 先清理该目录下残留的浏览器进程与 profile 锁文件
+	// （上次异常退出 / 容器重启留下的 SingletonLock 会导致新进程无法启动）
 	KillStaleBrowser(userDataDir)
 
 	l := launcher.New().
@@ -169,17 +170,29 @@ func KillStaleBrowser(userDataDir string) {
 	pidFile := browserPidFile(userDataDir)
 	b, err := os.ReadFile(pidFile)
 	if err != nil {
+		// 即使没有 PID 文件，也要清理 Singleton 锁文件
+		// （容器重启后 hostname 变化，残留锁会阻止新进程启动）
+		removeSingletonLocks(userDataDir)
 		return
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
 	if err != nil || pid <= 0 {
 		_ = os.Remove(pidFile)
+		removeSingletonLocks(userDataDir)
 		return
 	}
 	killProcessTree(pid)
 	// 给浏览器进程一点退出时间，避免后续启动锁冲突
 	time.Sleep(800 * time.Millisecond)
 	_ = os.Remove(pidFile)
+	removeSingletonLocks(userDataDir)
+}
+
+// removeSingletonLocks 清理 Chromium profile 锁文件
+func removeSingletonLocks(userDataDir string) {
+	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
+		_ = os.Remove(filepath.Join(userDataDir, name))
+	}
 }
 
 // KillStaleBrowsers 清理 dataDir 下所有账号的残留浏览器进程

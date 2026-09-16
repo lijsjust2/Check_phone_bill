@@ -568,9 +568,9 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		s.apiFail(w, "参数错误")
 		return
 	}
-	// 查询时间：HH:MM 单个或英文逗号分隔的多个（如 "08:00,20:00"，兼作保活）
+	// 查询时间：HH:MM，单个时间即可（如 "08:00"），也可填多个用逗号分隔
 	if !validQueryTime(req.QueryTime) {
-		s.apiFail(w, "查询时间格式应为 HH:MM，多个时间用英文逗号分隔，如 08:00,20:00")
+		s.apiFail(w, "查询时间格式应为 HH:MM，如 08:00；多个时间用英文逗号分隔")
 		return
 	}
 	if req.Push.BarkEnabled && strings.TrimSpace(req.Push.BarkKey) == "" {
