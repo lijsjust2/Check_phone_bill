@@ -2,11 +2,12 @@ package telecom
 
 import (
 	"crypto/tls"
-	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"chinamobile-monitor/internal/netx"
 )
 
 // 电信网关（appgologin.189.cn / appfuwu.189.cn）TLS 配置老旧：
@@ -48,7 +49,7 @@ func newClient() *http.Client {
 					tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
 				},
 			},
-			DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
+			DialContext:           netx.IPv4DialContext,
 			ResponseHeaderTimeout: 20 * time.Second,
 		},
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"chinamobile-monitor/internal/loggerx"
+	"chinamobile-monitor/internal/netx"
 )
 
 // 联通微信小程序通道（2026-09 起唯一通道：OpenID 凭证，纯 HTTP，无浏览器/短信/风控）。
@@ -75,7 +76,15 @@ var (
 	ErrOpenIDInvalid = errors.New("OpenID 无效或已失效，请重新抓包获取")
 )
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var httpClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		// Docker 容器（飞牛OS 等）可能 IPv6 不通但 DNS 返回了 AAAA 记录，
+		// Go 默认会优先尝试 IPv6 导致 TLS 握手超时。强制走 IPv4 规避。
+		DialContext:           netx.IPv4DialContext,
+		ResponseHeaderTimeout: 20 * time.Second,
+	},
+}
 
 // ---------- 登录票据 ----------
 
