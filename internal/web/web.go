@@ -149,6 +149,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/daily/phone", s.apiDailyByPhone)
 	mux.HandleFunc("/api/backup/export", s.apiBackupExport)
 	mux.HandleFunc("/api/backup/import", s.apiBackupImport)
+	mux.HandleFunc("/api/diag/net", s.apiDiagNet)
 
 	addr := fmt.Sprintf(":%d", s.port)
 	s.log.Info("Web 面板启动: http://localhost:%d", s.port)

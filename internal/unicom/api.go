@@ -82,7 +82,9 @@ var httpClient = &http.Client{
 		// Docker 容器（飞牛OS 等）可能 IPv6 不通但 DNS 返回了 AAAA 记录，
 		// Go 默认会优先尝试 IPv6 导致 TLS 握手超时。强制走 IPv4 规避。
 		DialContext:           netx.IPv4DialContext,
+		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 20 * time.Second,
+		IdleConnTimeout:       60 * time.Second,
 	},
 }
 

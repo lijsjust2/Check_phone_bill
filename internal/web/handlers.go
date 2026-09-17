@@ -1,17 +1,24 @@
 package web
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"chinamobile-monitor/internal/carrier"
+	"chinamobile-monitor/internal/netx"
 	"chinamobile-monitor/internal/push"
 	"chinamobile-monitor/internal/store"
+	"chinamobile-monitor/internal/telecom"
 )
 
 type pageData struct {
@@ -980,3 +987,149 @@ func (s *Server) requireAPI(w http.ResponseWriter, r *http.Request) bool {
 
 // dataDir 数据目录（Server 初始化时保存）
 func (s *Server) dataDir() string { return s.dir }
+
+// apiDiagNet 网络诊断：从容器内分阶段（DNS→TCP→TLS→HTTP）探测各运营商接口连通性。
+// 排查 Docker 环境（飞牛OS 等）出口网络问题用：登录面板后在浏览器直接访问本接口。
+// 探测走与生产一致的出口配置（强制 IPv4 + MSS 钳制 + 电信兼容 TLS）。
+func (s *Server) apiDiagNet(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAPI(w, r) {
+		return
+	}
+	type target struct {
+		name, url, method string
+		bodyLen           int
+	}
+	targets := []target{
+		{"基线·百度", "https://www.baidu.com/", http.MethodGet, 0},
+		{"大包POST·MTU探测", "https://www.baidu.com/", http.MethodPost, 2048},
+		{"电信登录网关", "https://appgologin.189.cn:9031/login/client/userLoginNormal", http.MethodGet, 0},
+		{"电信查询网关", "https://appfuwu.189.cn:9021/query/qryImportantData", http.MethodGet, 0},
+		{"联通小程序网关", "https://mina.10010.com/wxapplet/weixinNew/getTicket", http.MethodGet, 0},
+		{"联通掌厅接口", "https://mxx.client.10010.com/servicebusiness/wx/serviceEntrance", http.MethodGet, 0},
+		{"广电营业厅", "https://www.10099.com.cn/login.html", http.MethodGet, 0},
+	}
+	type result struct {
+		Name       string   `json:"name"`
+		URL        string   `json:"url"`
+		Method     string   `json:"method,omitempty"`
+		IPs        []string `json:"ips,omitempty"`
+		DNSMs      int64    `json:"dns_ms,omitempty"`
+		TCPMs      int64    `json:"tcp_ms,omitempty"`
+		TLSMs      int64    `json:"tls_ms,omitempty"`
+		TLSVersion string   `json:"tls_version,omitempty"`
+		HTTPStatus int      `json:"http_status,omitempty"`
+		HTTPMs     int64    `json:"http_ms,omitempty"`
+		Phase      string   `json:"phase,omitempty"` // 失败阶段：dns/tcp/tls/http
+		Error      string   `json:"error,omitempty"`
+	}
+	results := make([]result, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, t target) {
+			defer wg.Done()
+			res := result{Name: t.name, URL: t.url, Method: t.method}
+			defer func() { results[i] = res }()
+			var dnsAt, tcpAt, tlsAt, httpAt time.Time
+			trace := &httptrace.ClientTrace{
+				DNSDone: func(info httptrace.DNSDoneInfo) {
+					if dnsAt.IsZero() {
+						dnsAt = time.Now()
+					}
+					for _, a := range info.Addrs {
+						res.IPs = append(res.IPs, a.String())
+					}
+				},
+				ConnectDone: func(_, _ string, err error) {
+					if err == nil && tcpAt.IsZero() {
+						tcpAt = time.Now()
+					}
+				},
+				TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
+					if err == nil && tlsAt.IsZero() {
+						tlsAt = time.Now()
+						res.TLSVersion = tls.VersionName(cs.Version)
+					}
+				},
+				GotFirstResponseByte: func() {
+					if httpAt.IsZero() {
+						httpAt = time.Now()
+					}
+				},
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			defer cancel()
+			ctx = httptrace.WithClientTrace(ctx, trace)
+			var body io.Reader
+			if t.bodyLen > 0 {
+				body = strings.NewReader(strings.Repeat("x", t.bodyLen))
+			}
+			req, err := http.NewRequestWithContext(ctx, t.method, t.url, body)
+			if err != nil {
+				res.Phase, res.Error = "http", err.Error()
+				return
+			}
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
+			client := &http.Client{
+				Timeout: 15 * time.Second,
+				Transport: &http.Transport{
+					DialContext:           netx.IPv4DialContext,
+					TLSClientConfig:       telecom.TLSConfig(),
+					TLSHandshakeTimeout:   12 * time.Second,
+					ResponseHeaderTimeout: 12 * time.Second,
+				},
+			}
+			t0 := time.Now()
+			resp, err := client.Do(req)
+			// 各阶段耗时：本阶段起点 = 上一阶段完成时刻（缺失时回退 t0）
+			prev := t0
+			if !dnsAt.IsZero() {
+				res.DNSMs = spanMs(prev, dnsAt)
+				prev = dnsAt
+			}
+			if !tcpAt.IsZero() {
+				res.TCPMs = spanMs(prev, tcpAt)
+				prev = tcpAt
+			}
+			if !tlsAt.IsZero() {
+				res.TLSMs = spanMs(prev, tlsAt)
+				prev = tlsAt
+			}
+			if !httpAt.IsZero() {
+				res.HTTPMs = spanMs(prev, httpAt)
+			}
+			if err != nil {
+				res.Phase, res.Error = netErrPhase(err), err.Error()
+				return
+			}
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
+			res.HTTPStatus = resp.StatusCode
+		}(i, t)
+	}
+	wg.Wait()
+	writeJSON(w, map[string]interface{}{"ok": true, "results": results})
+}
+
+// spanMs 计算两个时间点之间的毫秒数（无效输入返回 0）
+func spanMs(from, to time.Time) int64 {
+	if from.IsZero() || to.IsZero() || to.Before(from) {
+		return 0
+	}
+	return to.Sub(from).Milliseconds()
+}
+
+// netErrPhase 按错误文本粗分失败阶段
+func netErrPhase(err error) string {
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "lookup"):
+		return "dns"
+	case strings.Contains(s, "dial"):
+		return "tcp"
+	case strings.Contains(s, "TLS"):
+		return "tls"
+	default:
+		return "http"
+	}
+}

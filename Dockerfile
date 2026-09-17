@@ -30,7 +30,8 @@ ENV PORT=10086 \
     TZ=Asia/Shanghai \
     BROWSER_BIN=/usr/bin/chromium-browser \
     BROWSER_NO_SANDBOX=1 \
-    HOME=/home/app
+    HOME=/home/app \
+    GODEBUG=tlsrsakex=1
 VOLUME /app/data
 EXPOSE 10086
 # 以 root 启动执行 entrypoint（仅用于 chown 数据目录），随后降权为 app 用户
