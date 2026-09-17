@@ -92,11 +92,11 @@ var httpClient = &http.Client{
 
 // getTicket 用 OpenID 换取查询票据（ticket）。
 // 注意：此接口的请求体字段名是 openId（大写 I），与其他接口的 openid 不同。
-func getTicket(ctx context.Context, openid string) (string, error) {
+func getTicket(ctx context.Context, openid string, log *loggerx.Logger) (string, error) {
 	body, err := postJSON(ctx, wxGetTicketURL, map[string]string{
 		"openId":  openid,
 		"channel": wxMiniProgramChan,
-	})
+	}, log)
 	if err != nil {
 		return "", fmt.Errorf("获取票据请求失败: %w", err)
 	}
@@ -160,11 +160,11 @@ func serviceEntrance(ctx context.Context, ticket string, log *loggerx.Logger) st
 }
 
 // queryGoodsPhone 读取该 OpenID 名下绑定的完整手机号（登录时校验用；失败返回空串）。
-func queryGoodsPhone(ctx context.Context, openid string) string {
+func queryGoodsPhone(ctx context.Context, openid string, log *loggerx.Logger) string {
 	body, err := postJSON(ctx, wxGoodsListURL, map[string]string{
 		"openid":  openid,
 		"channel": wxMiniProgramChan,
-	})
+	}, log)
 	if err != nil {
 		return ""
 	}
@@ -189,7 +189,7 @@ func ticketPhone() string {
 
 // QueryFlowLeft 余量查询（queryOcsPackageFlowLeftContentRevisedInJune，MB 单位）
 func QueryFlowLeft(ctx context.Context, ticket, tp, cookie string, log *loggerx.Logger) (gjson.Result, string, error) {
-	body, err := postUnicomForm(ctx, wxFlowLeftURL, flowLeftForm(ticket, tp), cookie)
+	body, err := postUnicomForm(ctx, wxFlowLeftURL, flowLeftForm(ticket, tp), cookie, log)
 	if err != nil {
 		return gjson.Result{}, "", fmt.Errorf("余量查询请求失败: %w", err)
 	}
@@ -202,7 +202,7 @@ func QueryFlowLeft(ctx context.Context, ticket, tp, cookie string, log *loggerx.
 
 // QueryBalance 话费余额查询（accountBalancenew.htm，与余量查询同域同凭证）
 func QueryBalance(ctx context.Context, ticket, tp, cookie string, log *loggerx.Logger) (gjson.Result, error) {
-	body, err := postUnicomForm(ctx, wxBalanceURL, balanceForm(ticket, tp), cookie)
+	body, err := postUnicomForm(ctx, wxBalanceURL, balanceForm(ticket, tp), cookie, log)
 	if err != nil {
 		return gjson.Result{}, fmt.Errorf("话费查询请求失败: %w", err)
 	}
@@ -241,7 +241,7 @@ func balanceForm(ticket, tp string) url.Values {
 // postJSON 提交 JSON 请求体，返回响应文本。
 // mina.10010.com 域挂阿里云 WAF：必须先 GET 同路径领 acw_tc 会话 cookie 再 POST，
 // 否则会被拦截成「温馨提示」页（curl/schannel TLS 指纹会被拦，Go 标准库指纹可过，已实测）。
-func postJSON(ctx context.Context, rawURL string, payload interface{}) (string, error) {
+func postJSON(ctx context.Context, rawURL string, payload interface{}, log *loggerx.Logger) (string, error) {
 	// WAF 预热：GET 同路径领 acw_tc
 	req0, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -272,7 +272,7 @@ func postJSON(ctx context.Context, rawURL string, payload interface{}) (string, 
 	if len(acw) > 0 {
 		req.Header.Set("Cookie", strings.Join(acw, "; "))
 	}
-	return doRead(req)
+	return doRead(req, log)
 }
 
 // setWxHeaders 微信小程序通道公共请求头
@@ -284,7 +284,7 @@ func setWxHeaders(req *http.Request) {
 }
 
 // postUnicomForm 提交掌厅表单查询（application/x-www-form-urlencoded，携带掌厅会话 cookie）
-func postUnicomForm(ctx context.Context, rawURL string, form url.Values, cookie string) (string, error) {
+func postUnicomForm(ctx context.Context, rawURL string, form url.Values, cookie string, log *loggerx.Logger) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
@@ -296,15 +296,22 @@ func postUnicomForm(ctx context.Context, rawURL string, form url.Values, cookie 
 	if cookie != "" {
 		req.Header.Set("Cookie", cookie)
 	}
-	return doRead(req)
+	return doRead(req, log)
 }
 
-func doRead(req *http.Request) (string, error) {
+func doRead(req *http.Request, log *loggerx.Logger) (string, error) {
+	start := time.Now()
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		if log != nil {
+			log.Error("[联通] %s %s 请求异常（%s）: %v", req.Method, req.URL.Host, time.Since(start).Round(time.Millisecond), err)
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
+	if log != nil {
+		log.Info("[联通] %s %s → HTTP %d（耗时 %s）", req.Method, req.URL.Host, resp.StatusCode, time.Since(start).Round(time.Millisecond))
+	}
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -68,9 +69,14 @@ func main() {
 }
 
 func serve(dataDir string, port int, st *store.Store, log *loggerx.Logger, r *runner.Runner) {
-	fmt.Printf("四网话费监控 v%s\n", version)
+	log.Info("四网话费监控 v%s 启动（Go %s / %s）", version, runtime.Version(), runtime.GOOS+"/"+runtime.GOARCH)
 	if abs, err := filepath.Abs(dataDir); err == nil {
-		fmt.Printf("数据目录: %s\n", abs)
+		log.Info("数据目录: %s", abs)
+	}
+	if n := len(st.ListAccounts()); n > 0 {
+		log.Info("已加载 %d 个账号", n)
+	} else {
+		log.Info("暂无账号，请通过面板添加")
 	}
 
 	// 首次启动时把已有账号的登录态标志同步一次

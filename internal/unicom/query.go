@@ -43,7 +43,7 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 		err    error
 	)
 	for attempt := 1; attempt <= 2; attempt++ {
-		ticket, err = getTicket(ctx, openid)
+		ticket, err = getTicket(ctx, openid, log)
 		if err != nil {
 			if errors.Is(err, ErrOpenIDInvalid) {
 				pr.Err = "OpenID 无效或已失效，请重新抓包获取后重新添加账号"

@@ -53,7 +53,7 @@ func commonHeaders() map[string]string {
 // postJSON 通用请求：返回响应体文本。
 // 显式携带 Accept-Encoding: gzip 时 Go transport 不会透明解压，需手动解压
 // （查询网关 appfuwu.189.cn 返回 gzip，登录网关 appgologin.189.cn 不压缩）。
-func postJSON(ctx context.Context, url string, body map[string]interface{}) (string, error) {
+func postJSON(ctx context.Context, url string, body map[string]interface{}, log *loggerx.Logger) (string, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return "", err
@@ -65,11 +65,18 @@ func postJSON(ctx context.Context, url string, body map[string]interface{}) (str
 	for k, v := range commonHeaders() {
 		req.Header.Set(k, v)
 	}
+	start := time.Now()
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		if log != nil {
+			log.Error("[电信] POST %s 请求异常（%s）: %v", req.URL.Host, time.Since(start).Round(time.Millisecond), err)
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
+	if log != nil {
+		log.Info("[电信] POST %s → HTTP %d（耗时 %s）", req.URL.Host, resp.StatusCode, time.Since(start).Round(time.Millisecond))
+	}
 	b2, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
@@ -144,11 +151,8 @@ func DoLogin(ctx context.Context, phone, password, androidID string, log *logger
 		"headerInfos": headerInfos("userLoginNormal", ts, "", phone),
 	}
 
-	text, err := postJSON(ctx, loginURL, body)
+	text, err := postJSON(ctx, loginURL, body, log)
 	if err != nil {
-		if log != nil {
-			log.Error("[%s] 电信登录请求失败: %v", phone, err)
-		}
 		return nil, fmt.Errorf("登录请求失败: %w", err)
 	}
 	if log != nil {
@@ -220,11 +224,8 @@ func QryImportantData(ctx context.Context, phone, token, provinceCode, cityCode 
 		"headerInfos": headerInfos("qryImportantData", ts, token, phone),
 	}
 
-	text, err := postJSON(ctx, queryURL, body)
+	text, err := postJSON(ctx, queryURL, body, log)
 	if err != nil {
-		if log != nil {
-			log.Error("[%s] 电信查询请求失败: %v", phone, err)
-		}
 		return nil, fmt.Errorf("查询请求失败: %w", err)
 	}
 	if log != nil {

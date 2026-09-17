@@ -71,7 +71,7 @@ func (s *wxSession) run() {
 	s.setStage(carrier.StageStarting, "正在验证 OpenID...")
 
 	// 1. OpenID → ticket（无效会返回 ErrOpenIDInvalid）
-	ticket, err := getTicket(s.ctx, s.openid)
+	ticket, err := getTicket(s.ctx, s.openid, s.log)
 	if err != nil {
 		s.finishError(err)
 		return
@@ -88,7 +88,7 @@ func (s *wxSession) run() {
 	}
 
 	// 3. 尽力校验：OpenID 名下完整手机号与输入一致
-	if p := queryGoodsPhone(s.ctx, s.openid); p != "" && p != s.phone {
+	if p := queryGoodsPhone(s.ctx, s.openid, s.log); p != "" && p != s.phone {
 		s.finishError(fmt.Errorf("该 OpenID 绑定的号码是 %s，与输入的手机号 %s 不一致，请检查后重试",
 			carrier.MaskPhone(p), carrier.MaskPhone(s.phone)))
 		return
