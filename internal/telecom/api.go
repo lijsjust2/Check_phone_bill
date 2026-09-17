@@ -146,6 +146,9 @@ func DoLogin(ctx context.Context, phone, password, androidID string, log *logger
 
 	text, err := postJSON(ctx, loginURL, body)
 	if err != nil {
+		if log != nil {
+			log.Error("[%s] 电信登录请求失败: %v", phone, err)
+		}
 		return nil, fmt.Errorf("登录请求失败: %w", err)
 	}
 	if log != nil {
@@ -219,6 +222,9 @@ func QryImportantData(ctx context.Context, phone, token, provinceCode, cityCode 
 
 	text, err := postJSON(ctx, queryURL, body)
 	if err != nil {
+		if log != nil {
+			log.Error("[%s] 电信查询请求失败: %v", phone, err)
+		}
 		return nil, fmt.Errorf("查询请求失败: %w", err)
 	}
 	if log != nil {

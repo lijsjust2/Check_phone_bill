@@ -117,7 +117,7 @@ func getTicket(ctx context.Context, openid string) (string, error) {
 
 // serviceEntrance 用 ticket 换取掌厅会话 cookie（microHallUser / microHallAccessToken）。
 // 尽力而为：失败返回空串，查询仍会尝试（部分环境仅凭 ticket 即可）。
-func serviceEntrance(ctx context.Context, ticket string) string {
+func serviceEntrance(ctx context.Context, ticket string, log *loggerx.Logger) string {
 	u := wxServiceEntranceURL +
 		"?ticket=" + url.QueryEscape(ticket) +
 		"&servicecode=" + wxServiceCode +
@@ -129,6 +129,9 @@ func serviceEntrance(ctx context.Context, ticket string) string {
 	setWxHeaders(req)
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		if log != nil {
+			log.Warn("联通 serviceEntrance 请求失败（查询仍会尝试）: %v", err)
+		}
 		return ""
 	}
 	defer resp.Body.Close()
@@ -142,6 +145,9 @@ func serviceEntrance(ctx context.Context, ticket string) string {
 		case "microHallAccessToken":
 			access = c.Value
 		}
+	}
+	if user == "" && access == "" && log != nil {
+		log.Warn("联通 serviceEntrance 未返回掌厅会话 Cookie（HTTP %d，查询仍会尝试）", resp.StatusCode)
 	}
 	var parts []string
 	if user != "" {

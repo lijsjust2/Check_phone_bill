@@ -54,14 +54,24 @@ func (r *Runner) QueryAll(doPush bool) error {
 			r.mu.Unlock()
 		}()
 		accounts := r.st.ListAccounts()
+		okCnt := 0
+		start := time.Now()
+		r.log.Info("开始查询全部账号（共 %d 个）", len(accounts))
 		results := make([]*carrier.Result, 0, len(accounts))
 		for _, a := range accounts {
 			r.mu.Lock()
 			r.currentPhone = a.Phone
 			r.mu.Unlock()
+			if p := carrier.Get(a.CarrierCode()); p != nil {
+				r.log.Info("[%s] 开始查询（%s）", a.Phone, p.Name())
+			}
 			pr := r.queryOneUpdate(a)
+			if pr.Err == "" {
+				okCnt++
+			}
 			results = append(results, pr)
 		}
+		r.log.Info("全部查询完成：成功 %d/%d（耗时 %s）", okCnt, len(accounts), time.Since(start).Round(time.Second))
 		if doPush {
 			r.pushResults(results)
 		}

@@ -79,6 +79,16 @@ func New(st *store.Store, log *loggerx.Logger, r *runner.Runner, port int, dataD
 	// 登录会话结束回调：成功时保存登录态（浏览器型置 HasLoginState；密码型由 LoginStateSaver 写回 token）
 	s.flows = carrier.NewSessionManager(func(m carrier.SessionMeta, sess carrier.LoginSession) {
 		if m.Stage != carrier.StageSuccess {
+			// 失败/取消也落日志（含阶段与原因），否则容器日志里看不到登录为何结束
+			cname := m.Carrier
+			if p := carrier.Get(m.Carrier); p != nil {
+				cname = p.Name()
+			}
+			if m.Msg != "" {
+				log.Warn("[%s] %s登录未完成（阶段 %s）: %s", m.Phone, cname, m.Stage, m.Msg)
+			} else {
+				log.Warn("[%s] %s登录未完成（阶段 %s）", m.Phone, cname, m.Stage)
+			}
 			return
 		}
 		st.UpdateAccount(m.Phone, func(a *store.Account) {

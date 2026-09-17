@@ -474,6 +474,7 @@ func (s *Server) apiLoginFlowStart(w http.ResponseWriter, r *http.Request) {
 		Headless:  true, // 联通 OpenID 登录为纯 HTTP，所有运营商全程无头
 		Log:       s.log,
 	}); err != nil {
+		s.log.Error("[%s] %s登录流程启动失败: %v", req.Phone, p.Name(), err)
 		s.apiFail(w, err.Error())
 		return
 	}

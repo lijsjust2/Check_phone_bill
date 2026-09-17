@@ -54,7 +54,7 @@ func QueryPhone(acc *store.Account, dataDir string, log *loggerx.Logger) *carrie
 			}
 			return pr
 		}
-		cookie = serviceEntrance(ctx, ticket)
+		cookie = serviceEntrance(ctx, ticket, log)
 		tp = ticketPhone()
 		res, raw, err = QueryFlowLeft(ctx, ticket, tp, cookie, log)
 		if errors.Is(err, ErrTicketInvalid) && attempt == 1 {

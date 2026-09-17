@@ -78,7 +78,7 @@ func (s *wxSession) run() {
 	}
 
 	// 2. ticket → 掌厅会话 Cookie（尽力而为，失败不阻断）
-	cookie := serviceEntrance(s.ctx, ticket)
+	cookie := serviceEntrance(s.ctx, ticket, s.log)
 	if s.log != nil {
 		if cookie != "" {
 			s.log.Info("[%s] 联通 OpenID 验证通过，已获取掌厅会话", s.phone)
